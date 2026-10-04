@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.3.1';
+  const COACH_VERSION = '1.4.0';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -47,18 +47,140 @@
     return;
   }
 
-  /* ------------------ V1.3 ATTEMPT QUALITY GATE ------------------
-     Mantiene RULES y sus umbrales geométricos.
-     Solo mejora cuándo un movimiento se considera un intento real.
-     - Fondos: exige posición de apoyo + descenso real del cuerpo respecto a la mano.
-     - Push-ups/fondos: micro-movimientos no generan NO REP.
-  ---------------------------------------------------------------- */
+  /* ------------------ V1.4 TRUSTED-LIMB ATTEMPT GATE ------------------
+     Objetivo:
+     - Mantener intactos los umbrales geométricos de RULES.
+     - Evitar que un codo parcialmente oculto/hallucinado cree ciclos falsos.
+     - Usar un solo brazo confiable por serie de push-ups/fondos.
+     - Si el brazo confiable desaparece durante un intento, cancelar en silencio:
+       nunca cambiar de brazo a mitad de una repetición.
+     - Un NO REP solo existe después de un intento corporal comprometido.
+  ---------------------------------------------------------------------- */
+  const ccPressJudgeState={
+    exercise:null,
+    side:null,
+    missingFrames:0,
+    streak:{L:0,R:0},
+    ema:{L:0,R:0},
+    lastElbow:{L:null,R:null}
+  };
+
+  function ccResetPressJudgeState(){
+    ccPressJudgeState.exercise=null;
+    ccPressJudgeState.side=null;
+    ccPressJudgeState.missingFrames=0;
+    ccPressJudgeState.streak={L:0,R:0};
+    ccPressJudgeState.ema={L:0,R:0};
+    ccPressJudgeState.lastElbow={L:null,R:null};
+  }
+
+  const ccCoreResetJudge=resetJudge;
+  resetJudge=function(){
+    ccResetPressJudgeState();
+    return ccCoreResetJudge();
+  };
+
+  exerciseSelect.addEventListener('change',ccResetPressJudgeState);
+  video.addEventListener('seeking',ccResetPressJudgeState);
+  video.addEventListener('loadedmetadata',ccResetPressJudgeState);
+
+  function ccMetricForPressSide(pose,id,side){
+    const previous=lockedSide;
+    let m=null;
+    try{
+      lockedSide=side;
+      m=pressMetrics(pose,id);
+    }finally{
+      lockedSide=previous;
+    }
+    if(!m||m.side!==side)return null;
+
+    // El brazo que decide una repetición debe estar claramente resuelto.
+    // Esto es más estricto que la confianza mínima general de dibujo/detección,
+    // pero NO cambia home/away/depth/ROM de RULES.
+    const minConf=id==='dip'?.44:.38;
+    if(!Number.isFinite(m.confidence)||m.confidence<minConf)return null;
+
+    const sh=m.p?.shoulder,el=m.p?.elbow,wr=m.p?.wrist;
+    if(!sh||!el||!wr)return null;
+
+    const upper=distance(sh,el),lower=distance(el,wr);
+    if(!Number.isFinite(upper)||!Number.isFinite(lower)||Math.min(upper,lower)<10)return null;
+    const ratio=Math.min(upper,lower)/Math.max(upper,lower);
+    if(ratio<(id==='dip'?.32:.28))return null;
+
+    return m;
+  }
+
+  function ccChooseTrustedPressMetric(pose,id){
+    const state=ccPressJudgeState;
+    if(state.exercise!==id){
+      ccResetPressJudgeState();
+      state.exercise=id;
+    }
+
+    // Si ya existe un lado confiable, nunca cambiamos de lado dentro del ciclo.
+    if(state.side){
+      const m=ccMetricForPressSide(pose,id,state.side);
+      if(m){
+        state.missingFrames=0;
+        return m;
+      }
+
+      state.missingFrames++;
+      if(state.missingFrames<=5)return null;
+
+      // Pérdida real de la articulación: cancelar intento sin REP/NO REP.
+      loseAttempt();
+      state.side=null;
+      state.missingFrames=0;
+      state.streak={L:0,R:0};
+      state.ema={L:0,R:0};
+      state.lastElbow={L:null,R:null};
+      return null;
+    }
+
+    const candidates={};
+    for(const side of ['L','R']){
+      const m=ccMetricForPressSide(pose,id,side);
+      candidates[side]=m;
+
+      if(!m||!m.home){
+        state.streak[side]=0;
+        state.lastElbow[side]=null;
+        state.ema[side]*=.75;
+        continue;
+      }
+
+      const prev=state.lastElbow[side];
+      const stable=prev==null||Math.abs(m.elbow-prev)<=12;
+      state.streak[side]=stable?state.streak[side]+1:1;
+      state.lastElbow[side]=m.elbow;
+      state.ema[side]=state.ema[side]
+        ? state.ema[side]*.72+m.confidence*.28
+        : m.confidence;
+    }
+
+    const ready=['L','R']
+      .filter(side=>candidates[side]&&state.streak[side]>=4)
+      .sort((a,b)=>
+        (state.ema[b]+candidates[b].quality*.20)-
+        (state.ema[a]+candidates[a].quality*.20)
+      );
+
+    if(!ready.length)return null;
+
+    state.side=ready[0];
+    state.missingFrames=0;
+    return candidates[state.side];
+  }
+
   function ccDipSupportGeometry(m){
-    const sh=m?.p?.shoulder, wr=m?.p?.wrist;
+    const sh=m?.p?.shoulder,wr=m?.p?.wrist;
     if(!sh||!wr||!Number.isFinite(m?.length)||m.length<=0)return false;
     const horizontal=Math.abs(wr.x-sh.x)/m.length;
     const vertical=(wr.y-sh.y)/m.length;
-    return horizontal<=.48 && vertical>=.22;
+    return horizontal<=.52 && vertical>=.20;
   }
 
   function ccPrimeDipSupport(c,m,frames=1){
@@ -72,20 +194,26 @@
   function ccPressCommitted(c,id,r){
     const start=Number.isFinite(c?.startAngle)?c.startAngle:null;
     const extreme=Number.isFinite(c?.extreme)?c.extreme:start;
-    const excursion=Number.isFinite(start)&&Number.isFinite(extreme)?Math.max(0,start-extreme):0;
+    const excursion=Number.isFinite(start)&&Number.isFinite(extreme)
+      ? Math.max(0,start-extreme):0;
     const travel=Number.isFinite(c?.maxTravel)?c.maxTravel:0;
 
     if(id==='dip'){
       const bodyDrop=Number.isFinite(c?.maxBodyDrop)?c.maxBodyDrop:0;
       const wristDrift=Number.isFinite(c?.maxWristDrift)?c.maxWristDrift:Infinity;
+
+      // Un NO REP de fondos necesita evidencia de que el CUERPO realmente
+      // descendió sobre una mano de apoyo estable. Flexionar el codo de pie
+      // o un keypoint alucinado ya no basta.
       return !!c?.supportQualified &&
-        bodyDrop>=.06 &&
-        wristDrift<=.24 &&
-        excursion>=Math.max(20,(r.minExcursion||40)*.45);
+        bodyDrop>=.10 &&
+        wristDrift<=.18 &&
+        excursion>=Math.max(24,(r.minExcursion||40)*.58);
     }
 
     if(id==='pushup'){
-      return excursion>=Math.max(20,(r.minExcursion||45)*.45) && travel>=.025;
+      return excursion>=Math.max(22,(r.minExcursion||45)*.50) &&
+        travel>=.035;
     }
 
     return true;
@@ -102,16 +230,31 @@
       if(m.home){
         seedPress(m,id,now);
         if(id==='dip'&&ccDipSupportGeometry(m))ccPrimeDipSupport(cycle,m,1);
-        setStatus(id==='dip'?'Apóyate estable arriba y baja cuando estés listo.':'Listo. Baja sin detenerte.','ok');
+        setStatus(
+          id==='dip'
+            ? 'Brazo de referencia detectado. Apóyate arriba y baja cuando estés listo.'
+            : 'Brazo de referencia detectado. Baja cuando estés listo.',
+          'ok'
+        );
       }else{
-        setStatus(id==='dip'?'Sube a una posición de apoyo estable para iniciar.':'Completa la extensión para iniciar; no necesitas detenerte.','warn');
+        setStatus(
+          id==='dip'
+            ? 'Muestra un brazo completo y sube a la posición de apoyo.'
+            : 'Muestra un brazo completo y completa la extensión.',
+          'warn'
+        );
       }
       return;
     }
 
     const c=cycle,dt=now-c.last;
     c.last=now;
-    if(m.side!==lockedSide){loseAttempt();return;}
+
+    if(m.side!==lockedSide){
+      // Nunca enlazar dos mitades de brazos diferentes.
+      loseAttempt();
+      return;
+    }
 
     if(!c.active){
       if(m.home){
@@ -125,7 +268,7 @@
               ccPrimeDipSupport(c,m,1);
             }else{
               const drift=distance(m.p.wrist,c.supportAnchor)/Math.max(1,c.length);
-              if(drift<=.12){
+              if(drift<=.10){
                 c.supportFrames=(c.supportFrames||0)+1;
                 c.supportShoulderY=m.p.shoulder.y;
                 c.supportLength=m.length;
@@ -143,9 +286,8 @@
 
       if(m.elbow>=r.depart)return;
 
-      if(id==='dip'&&(c.supportFrames||0)<2){
-        // Está flexionando el brazo, pero todavía no vemos un apoyo estable.
-        // No es una rep ni un NO REP.
+      if(id==='dip'&&(c.supportFrames||0)<3){
+        // Movimiento del brazo sin una base estable: ignorar.
         return;
       }
 
@@ -154,17 +296,21 @@
       c.maxTravel=0;
       c.maxBodyDrop=0;
       c.maxWristDrift=0;
-      c.supportQualified=id!=='dip'||(c.supportFrames||0)>=2;
+      c.supportQualified=id!=='dip'||(c.supportFrames||0)>=3;
 
       if(id==='dip'){
-        c.startShoulderY=Number.isFinite(c.supportShoulderY)?c.supportShoulderY:m.p.shoulder?.y;
-        c.startWrist=c.supportAnchor?{...c.supportAnchor}:
-          (m.p.wrist?{x:m.p.wrist.x,y:m.p.wrist.y}:null);
+        c.startShoulderY=Number.isFinite(c.supportShoulderY)
+          ? c.supportShoulderY
+          : m.p.shoulder?.y;
+        c.startWrist=c.supportAnchor
+          ? {...c.supportAnchor}
+          : (m.p.wrist?{x:m.p.wrist.x,y:m.p.wrist.y}:null);
       }
+
       resetAttemptMetrics();
     }
 
-    if(now-c.started>10000||m.length/c.length<.6||m.length/c.length>1.65){
+    if(now-c.started>10000||m.length/c.length<.68||m.length/c.length>1.48){
       loseAttempt();
       return;
     }
@@ -183,35 +329,67 @@
     let supportedMotion=true;
     if(id==='dip'){
       const sh=m.p?.shoulder,wr=m.p?.wrist;
+
       if(sh&&Number.isFinite(c.startShoulderY)){
-        c.maxBodyDrop=Math.max(c.maxBodyDrop||0,(sh.y-c.startShoulderY)/c.length);
+        c.maxBodyDrop=Math.max(
+          c.maxBodyDrop||0,
+          (sh.y-c.startShoulderY)/c.length
+        );
       }
+
       if(wr&&c.startWrist){
-        c.maxWristDrift=Math.max(c.maxWristDrift||0,distance(wr,c.startWrist)/c.length);
+        c.maxWristDrift=Math.max(
+          c.maxWristDrift||0,
+          distance(wr,c.startWrist)/c.length
+        );
       }
-      supportedMotion=(c.maxBodyDrop||0)>=.06 && (c.maxWristDrift||0)<=.24;
+
+      // Para una REP válida se exige además descenso corporal real.
+      supportedMotion=
+        (c.maxBodyDrop||0)>=.12 &&
+        (c.maxWristDrift||0)<=.18;
     }
 
-    // Los mismos criterios geométricos siguen decidiendo la rep válida.
-    if(m.away&&excursion>=r.minExcursion&&travel>=.10&&supportedMotion)c.hit=true;
+    // Los límites home/away/minExcursion continúan siendo EXACTAMENTE RULES.
+    if(
+      m.away &&
+      excursion>=r.minExcursion &&
+      travel>=.10 &&
+      supportedMotion
+    ){
+      c.hit=true;
+    }
 
     phase=c.hit?'UP':'DOWN';
     setProgress((r.home-m.elbow)/(r.home-r.away)*100,phaseLabel());
 
     if(m.home){
-      const good=c.hit&&!c.badForm&&c.samples>=3&&now-c.started>=180;
+      const good=
+        c.hit &&
+        !c.badForm &&
+        c.samples>=3 &&
+        now-c.started>=180;
+
       const committed=good||ccPressCommitted(c,id,r);
       const carrySupport=id==='dip'&&ccDipSupportGeometry(m);
       const min=c.extreme;
-      const reason=c.badForm?'se perdió la alineación':
-        !c.hit?'faltó profundidad o recorrido':'recorrido demasiado breve';
+      const reason=c.badForm
+        ? 'se perdió la alineación'
+        : !c.hit
+          ? 'faltó profundidad o recorrido'
+          : 'recorrido demasiado breve';
 
       seedPress(m,id,now);
-      if(carrySupport)ccPrimeDipSupport(cycle,m,2);
+      if(carrySupport)ccPrimeDipSupport(cycle,m,3);
       trackMinAngle(min);
 
       if(!committed){
-        setStatus(id==='dip'?'Apoyo detectado. Baja cuando quieras iniciar la repetición.':'Listo para la siguiente repetición.','ok');
+        setStatus(
+          id==='dip'
+            ? 'Sin intento: mantén el apoyo y baja cuando quieras comenzar.'
+            : 'Sin intento: listo para la siguiente repetición.',
+          'ok'
+        );
         return null;
       }
 
@@ -219,8 +397,46 @@
         if(good)validRep();
         else noRep(reason);
       }
+
       return {good,reason,min};
     }
+  };
+
+  // Sustituye el seguimiento doble L/R del core para estos presses por
+  // UN solo miembro confiable. Es la corrección principal para el video 44149.
+  const ccBaseJudgePress=judgePress;
+  judgePress=function(pose,id){
+    if(id!=='dip'&&id!=='pushup')return ccBaseJudgePress(pose,id);
+
+    const now=judgeTime();
+    const m=ccChooseTrustedPressMetric(pose,id);
+
+    if(!m){
+      if(cycle?.active){
+        setStatus('Mantén visible el mismo brazo completo para terminar la repetición.','warn');
+      }else{
+        setStatus(
+          id==='dip'
+            ? 'Esperando un brazo completo y estable sobre las barras.'
+            : 'Esperando un brazo completo y estable.',
+          'info'
+        );
+      }
+      return;
+    }
+
+    markVisible();
+    lockedSide=ccPressJudgeState.side;
+
+    updateMetrics(
+      m.confidence,
+      m.elbow,
+      id==='pushup'?m.align:m.depth*100,
+      id==='pushup'?'Alineación':'Hombro',
+      id==='pushup'?'°':'%'
+    );
+
+    return followPress(m,id,now,true);
   };
 
   /* ---------------------------- ADS ---------------------------- */
@@ -855,8 +1071,16 @@
   function fatigueText(){
     const f=fatiguePct();
     if(!Number.isFinite(f))return '—';
-    if(Math.abs(f)<5)return 'Estable';
-    return f>0?`+${f.toFixed(0)}% más lento`:`${Math.abs(f).toFixed(0)}% más rápido`;
+
+    // La tarjeta se llama FATIGA, por lo que nunca mostramos
+    // una mejora de ritmo como si fuera porcentaje de fatiga.
+    if(f<=0){
+      const gain=Math.abs(f);
+      return gain<3?'0% · estable':`0% · ritmo ↑${gain.toFixed(0)}%`;
+    }
+
+    if(f<3)return `${f.toFixed(0)}% · estable`;
+    return `${f.toFixed(0)}%`;
   }
 
   function commonInvalidReason(){
@@ -1300,11 +1524,17 @@
     const f=fatiguePct();
     if(!Number.isFinite(f))return null;
 
+    // 0% fatiga = verde.
+    // 8% = verde/amarillo.
+    // 15% = amarillo/naranja.
+    // 25% = rojo.
+    // >=30% = rojo intenso.
     if(f<=0)return 100;
-    if(f<=5)return 100-f*2;
-    if(f<=15)return 90-(f-5)*3;
-    if(f<=25)return 60-(f-15)*4;
-    return clampCoach(20-(f-25)*2,0,20);
+    if(f<=3)return 100;
+    if(f<=8)return 100-(f-3)*5;       // 100 -> 75
+    if(f<=15)return 75-(f-8)*4.3;     // 75 -> ~45
+    if(f<=25)return 45-(f-15)*3.5;    // 45 -> 10
+    return 0;
   }
 
   function updateHud(force=false){
