@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.0.0';
+  const COACH_VERSION = '1.0.1';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -81,6 +81,104 @@
       (window.adsbygoogle = window.adsbygoogle || []).push({});
     } catch (e) {
       console.warn('[Calicoach] AdSense todavía no está disponible.', e);
+    }
+  }
+
+  /* ---------------------- LAZY AI LIBRARIES ---------------------- */
+  const AI_LIBS = [
+    {
+      name: 'TensorFlow.js',
+      ready: () => typeof window.tf !== 'undefined',
+      urls: [
+        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js',
+        'https://unpkg.com/@tensorflow/tfjs@4.22.0/dist/tf.min.js'
+      ]
+    },
+    {
+      name: 'Pose Detection',
+      ready: () => typeof window.poseDetection !== 'undefined',
+      urls: [
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js',
+        'https://unpkg.com/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js'
+      ]
+    }
+  ];
+  let aiLoadPromise = null;
+
+  function loadExternalScript(url, timeoutMs=10000) {
+    return new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      let settled=false;
+      const finish=(ok,err)=>{
+        if(settled)return;
+        settled=true;
+        clearTimeout(timer);
+        if(!ok){
+          try{s.remove()}catch(_){}
+          reject(err||new Error('No se pudo cargar '+url));
+        } else resolve();
+      };
+      const timer=setTimeout(
+        ()=>finish(false,new Error('Timeout cargando '+url)),
+        timeoutMs
+      );
+      s.src=url;
+      s.async=true;
+      s.onload=()=>finish(true);
+      s.onerror=()=>finish(false,new Error('Error de red cargando '+url));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function ensureVisionLibraries() {
+    if (typeof window.tf !== 'undefined' && typeof window.poseDetection !== 'undefined') return;
+    if (aiLoadPromise) return aiLoadPromise;
+
+    aiLoadPromise=(async()=>{
+      for (const lib of AI_LIBS) {
+        if (lib.ready()) continue;
+        let lastError=null;
+        for (const url of lib.urls) {
+          try {
+            await loadExternalScript(url);
+            if (lib.ready()) {
+              lastError=null;
+              break;
+            }
+          } catch (e) {
+            lastError=e;
+            console.warn('[Calicoach] Falló '+lib.name+' desde '+url, e);
+          }
+        }
+        if (!lib.ready()) throw lastError || new Error('No se pudo cargar '+lib.name);
+      }
+    })();
+
+    try {
+      await aiLoadPromise;
+    } catch (e) {
+      aiLoadPromise=null;
+      throw e;
+    }
+  }
+
+  async function runWithAI(button, action) {
+    const original=button?.innerHTML || '';
+    if(button){
+      button.disabled=true;
+      button.textContent='Cargando IA…';
+    }
+    try {
+      await ensureVisionLibraries();
+      action();
+    } catch (e) {
+      console.error('[Calicoach] No se pudieron cargar las librerías de IA.', e);
+      alert('No se pudo cargar la IA. Revisa tu conexión y vuelve a intentarlo.');
+    } finally {
+      if(button){
+        button.disabled=false;
+        button.innerHTML=original;
+      }
     }
   }
 
@@ -616,16 +714,22 @@
     newSession();
   }
 
-  $c('ccStartLive').onclick=()=>{
-    enterFreeMode();
-    setTimeout(()=>{
-      if(typeof inputMode!=='undefined'&&inputMode==='clip') $c('returnCamera')?.click();
-      else $c('startBtn')?.click();
-    },80);
+  $c('ccStartLive').onclick=async()=>{
+    const button=$c('ccStartLive');
+    await runWithAI(button,()=>{
+      enterFreeMode();
+      setTimeout(()=>{
+        if(typeof inputMode!=='undefined'&&inputMode==='clip') $c('returnCamera')?.click();
+        else $c('startBtn')?.click();
+      },80);
+    });
   };
-  $c('ccStartVideo').onclick=()=>{
-    enterFreeMode();
-    setTimeout(()=>$c('referenceClip')?.click(),80);
+  $c('ccStartVideo').onclick=async()=>{
+    const button=$c('ccStartVideo');
+    await runWithAI(button,()=>{
+      enterFreeMode();
+      setTimeout(()=>$c('referenceClip')?.click(),80);
+    });
   };
   $c('ccOpenHistory').onclick=showHistory;
 
@@ -840,3 +944,4 @@
   /* Sin ads dentro de #app: por diseño, la pantalla de análisis permanece limpia. */
   console.info(`[Calicoach] UI ${COACH_VERSION} cargada. Core de jueceo conservado.`);
 })();
+
