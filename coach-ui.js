@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.5.0';
+  const COACH_VERSION = '1.6.0';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -47,17 +47,28 @@
     return;
   }
 
-  /* ---------------- V1.5 TRUSTED-LIMB + BODY-COHERENCE GATE ----------------
-     Objetivo principal para fondos:
-     - Mantener intactos los umbrales geométricos de RULES.
-     - No aceptar un codo parcialmente oculto/alucinado como brazo de jueceo.
-     - Elegir un solo brazo muy confiable y mantenerlo durante la serie.
-     - Considerar que existe un intento SOLO cuando descienden de forma coherente
-       hombro + cadera + parte baja del cuerpo respecto a una mano estable.
-     - Si se pierde el brazo confiable, cancelar en silencio: nunca cambiar de brazo
-       a mitad de una repetición.
-     - Un NO REP solo se crea después de un intento corporal real.
-  --------------------------------------------------------------------------- */
+  /* ---------------- V1.6 ORIENTATION-AWARE MOTION-SOURCE GATE ----------------
+     El ángulo articular sigue usando EXACTAMENTE RULES.
+     Esta capa decide si el cambio de ángulo fue causado por el movimiento correcto.
+
+     Fondos:
+       - Punto de apoyo: muñeca/mano.
+       - Eje de descenso: orientación del torso hombro -> cadera.
+       - Deben descender hombro + cadera mientras la muñeca permanece estable.
+       - Subir la muñeca hacia un hombro quieto NO abre un intento.
+
+     Push-ups:
+       - Punto de apoyo: muñeca/mano.
+       - Eje de descenso: normal al torso orientada hacia la mano.
+       - Deben desplazarse hombro + cadera hacia el apoyo mientras la muñeca
+         permanece estable.
+
+     En ambos:
+       - Se usa un único brazo de alta confianza.
+       - Nunca se cambia de brazo a mitad de una repetición.
+       - Una pérdida del brazo cancela el intento silenciosamente.
+       - NO REP solo existe después de un movimiento corporal comprometido.
+  ------------------------------------------------------------------------------ */
   const ccPressJudgeState={
     exercise:null,
     side:null,
@@ -86,6 +97,28 @@
   video.addEventListener('seeking',ccResetPressJudgeState);
   video.addEventListener('loadedmetadata',ccResetPressJudgeState);
 
+  function ccUnitFrom(a,b){
+    if(!a||!b)return null;
+    const dx=b.x-a.x,dy=b.y-a.y;
+    const d=Math.hypot(dx,dy);
+    if(!Number.isFinite(d)||d<8)return null;
+    return {x:dx/d,y:dy/d};
+  }
+
+  function ccDotDelta(point,start,axis,scale){
+    if(!point||!start||!axis||!Number.isFinite(scale)||scale<=0)return null;
+    return ((point.x-start.x)*axis.x+(point.y-start.y)*axis.y)/scale;
+  }
+
+  function ccFlipAxis(axis){
+    return axis?{x:-axis.x,y:-axis.y}:null;
+  }
+
+  function ccDot(a,b){
+    if(!a||!b)return null;
+    return a.x*b.x+a.y*b.y;
+  }
+
   function ccMetricForPressSide(pose,id,side){
     const previous=lockedSide;
     let m=null;
@@ -99,13 +132,18 @@
 
     if(!m||m.side!==side)return null;
 
-    // Un keypoint puede dibujarse con baja confianza y aun así ser geométricamente
-    // plausible. Para decidir REP/NO REP usamos una confianza bastante mayor.
-    const minConf=id==='dip'?.58:.42;
+    const minConf=id==='dip'?.60:.44;
     if(!Number.isFinite(m.confidence)||m.confidence<minConf)return null;
 
-    const sh=m.p?.shoulder,el=m.p?.elbow,wr=m.p?.wrist;
-    if(!sh||!el||!wr)return null;
+    const sh=m.p?.shoulder,el=m.p?.elbow,wr=m.p?.wrist,hip=m.p?.hip;
+    if(!sh||!el||!wr||!hip)return null;
+
+    if(
+      (sh.score??0)<minConf ||
+      (el.score??0)<minConf ||
+      (wr.score??0)<minConf ||
+      (hip.score??0)<.34
+    )return null;
 
     const upper=distance(sh,el),lower=distance(el,wr);
     if(
@@ -115,21 +153,14 @@
     )return null;
 
     const ratio=Math.min(upper,lower)/Math.max(upper,lower);
-    if(ratio<(id==='dip'?.36:.28))return null;
+    if(ratio<(id==='dip'?.38:.30))return null;
 
-    if(id==='dip'){
-      const hip=m.p?.hip;
-      if(!hip||(hip.score??0)<.30)return null;
+    m.ccHip=hip;
 
-      // La pierna/tobillo no decide el ángulo del fondo, pero sí ayuda a distinguir
-      // "cuerpo descendiendo" de "solo moví el brazo estando de pie".
-      let lowerBody=null;
-      if(m.p?.ankle&&(m.p.ankle.score??0)>=.22)lowerBody=m.p.ankle;
-      else if(m.p?.knee&&(m.p.knee.score??0)>=.24)lowerBody=m.p.knee;
-
-      m.ccHip=hip;
-      m.ccLowerBody=lowerBody;
-    }
+    let lowerBody=null;
+    if(m.p?.ankle&&(m.p.ankle.score??0)>=.24)lowerBody=m.p.ankle;
+    else if(m.p?.knee&&(m.p.knee.score??0)>=.26)lowerBody=m.p.knee;
+    m.ccLowerBody=lowerBody;
 
     return m;
   }
@@ -142,7 +173,6 @@
       state.exercise=id;
     }
 
-    // Una vez elegido el lado, nunca cambiamos de brazo dentro del ciclo.
     if(state.side){
       const m=ccMetricForPressSide(pose,id,state.side);
 
@@ -153,9 +183,9 @@
 
       state.missingFrames++;
 
-      // Toleramos oclusiones muy breves. Después cancelamos el intento sin NO REP.
       if(state.missingFrames<=4)return null;
 
+      // Nunca terminar una repetición usando el otro brazo.
       loseAttempt();
       state.side=null;
       state.missingFrames=0;
@@ -174,27 +204,27 @@
       if(!m||!m.home){
         state.streak[side]=0;
         state.lastElbow[side]=null;
-        state.ema[side]*=.72;
+        state.ema[side]*=.70;
         continue;
       }
 
       const prev=state.lastElbow[side];
-      const stable=prev==null||Math.abs(m.elbow-prev)<=10;
+      const stable=prev==null||Math.abs(m.elbow-prev)<=9;
 
       state.streak[side]=stable?state.streak[side]+1:1;
       state.lastElbow[side]=m.elbow;
       state.ema[side]=state.ema[side]
-        ? state.ema[side]*.78+m.confidence*.22
+        ? state.ema[side]*.80+m.confidence*.20
         : m.confidence;
     }
 
-    const requiredFrames=id==='dip'?7:5;
+    const requiredFrames=id==='dip'?8:5;
 
     const ready=['L','R']
       .filter(side=>candidates[side]&&state.streak[side]>=requiredFrames)
       .sort((a,b)=>{
-        const sb=state.ema[b]*1.25+candidates[b].quality*.12;
-        const sa=state.ema[a]*1.25+candidates[a].quality*.12;
+        const sb=state.ema[b]*1.35+candidates[b].quality*.10;
+        const sa=state.ema[a]*1.35+candidates[a].quality*.10;
         return sb-sa;
       });
 
@@ -205,49 +235,192 @@
     return candidates[state.side];
   }
 
-  function ccDipSupportGeometry(m){
-    const sh=m?.p?.shoulder,wr=m?.p?.wrist;
-    if(!sh||!wr||!Number.isFinite(m?.length)||m.length<=0)return false;
+  function ccPressAxis(m,id){
+    const sh=m?.p?.shoulder,hip=m?.ccHip,wr=m?.p?.wrist;
+    if(!sh||!hip||!wr)return null;
 
-    const horizontal=Math.abs(wr.x-sh.x)/m.length;
-    const vertical=(wr.y-sh.y)/m.length;
+    const torso=ccUnitFrom(sh,hip);
+    const towardHand=ccUnitFrom(sh,wr);
+    if(!torso||!towardHand)return null;
 
-    return horizontal<=.50 && vertical>=.20;
+    if(id==='dip'){
+      // En un fondo la traslación principal del cuerpo sigue el eje del torso
+      // desde hombro hacia cadera. Esto funciona aunque la cámara esté inclinada.
+      return torso;
+    }
+
+    // En push-up el descenso es aproximadamente perpendicular al torso.
+    let normal={x:-torso.y,y:torso.x};
+    if((ccDot(normal,towardHand)??0)<0)normal=ccFlipAxis(normal);
+    return normal;
   }
 
-  function ccPrimeDipSupport(c,m,frames=1){
-    if(!c||!m?.p?.wrist||!m?.p?.shoulder||!m?.ccHip)return;
+  function ccPrimeSupport(c,m,id,frames=1){
+    if(
+      !c||
+      !m?.p?.wrist||
+      !m?.p?.shoulder||
+      !m?.ccHip
+    )return false;
+
+    const axis=ccPressAxis(m,id);
+    if(!axis)return false;
+
+    const torsoLength=distance(m.p.shoulder,m.ccHip);
+    if(!Number.isFinite(torsoLength)||torsoLength<15)return false;
 
     c.supportFrames=frames;
-    c.supportAnchor={x:m.p.wrist.x,y:m.p.wrist.y};
-    c.supportShoulderY=m.p.shoulder.y;
-    c.supportHipY=m.ccHip.y;
-    c.supportLowerY=m.ccLowerBody?.y ?? null;
-    c.supportLength=m.length;
+    c.ccAnchor={
+      axis,
+      wrist:{x:m.p.wrist.x,y:m.p.wrist.y},
+      shoulder:{x:m.p.shoulder.x,y:m.p.shoulder.y},
+      hip:{x:m.ccHip.x,y:m.ccHip.y},
+      lower:m.ccLowerBody
+        ? {x:m.ccLowerBody.x,y:m.ccLowerBody.y}
+        : null,
+      torsoLength,
+      scale:m.length
+    };
+
+    return true;
   }
 
-  function ccDipBodyEvidence(c){
-    const shoulder=Number.isFinite(c?.maxShoulderDrop)?c.maxShoulderDrop:0;
-    const hip=Number.isFinite(c?.maxHipDrop)?c.maxHipDrop:0;
-    const lower=Number.isFinite(c?.maxLowerDrop)?c.maxLowerDrop:null;
+  function ccSupportPoseStable(c,m,id){
+    const a=c?.ccAnchor;
+    if(!a||!m?.p?.wrist||!m?.p?.shoulder||!m?.ccHip)return false;
 
-    // Si tobillo/rodilla está bien visible, debe acompañar al cuerpo.
-    // En una falsa flexión de codo estando de pie normalmente permanece fijo.
-    const lowerOk=lower==null ? true : lower>=.025;
+    const scale=Math.max(1,a.scale||m.length||1);
+    const wristDrift=distance(m.p.wrist,a.wrist)/scale;
+    const shoulderDrift=distance(m.p.shoulder,a.shoulder)/scale;
+    const hipDrift=distance(m.ccHip,a.hip)/scale;
 
+    // Mientras estamos "arriba" queremos una referencia bastante quieta.
+    const limit=id==='dip'?.075:.10;
+    return (
+      wristDrift<=limit &&
+      shoulderDrift<=.12 &&
+      hipDrift<=.12
+    );
+  }
+
+  function ccMotionEvidence(c,m,id){
+    const a=c?.ccAnchor;
+    if(
+      !a||
+      !m?.p?.wrist||
+      !m?.p?.shoulder||
+      !m?.ccHip
+    )return null;
+
+    const scale=Math.max(1,a.scale||m.length||1);
+    const axis=a.axis;
+
+    const shoulderAlong=ccDotDelta(m.p.shoulder,a.shoulder,axis,scale);
+    const hipAlong=ccDotDelta(m.ccHip,a.hip,axis,scale);
+    const wristAlong=ccDotDelta(m.p.wrist,a.wrist,axis,scale);
+    const wristDrift=distance(m.p.wrist,a.wrist)/scale;
+
+    const torsoNow=distance(m.p.shoulder,m.ccHip);
+    const torsoRatio=
+      Number.isFinite(torsoNow)&&a.torsoLength>0
+        ? torsoNow/a.torsoLength
+        : null;
+
+    let lowerAlong=null;
+    if(a.lower&&m.ccLowerBody){
+      lowerAlong=ccDotDelta(m.ccLowerBody,a.lower,axis,scale);
+    }
+
+    const positiveShoulder=Math.max(0,shoulderAlong??0);
+    const positiveHip=Math.max(0,hipAlong??0);
+    const bodyDrive=(positiveShoulder+positiveHip)/2;
+
+    // "Quién causó el ángulo":
+    // cuerpo moviéndose > mano moviéndose.
+    const driverRatio=bodyDrive/(Math.max(0,wristDrift)+.018);
+
+    const coherence=
+      positiveShoulder>0 &&
+      positiveHip>0 &&
+      Math.abs(positiveShoulder-positiveHip)<=.11;
+
+    const shapeStable=
+      Number.isFinite(torsoRatio)
+        ? torsoRatio>=.82&&torsoRatio<=1.20
+        : false;
+
+    const lowerCoherent=
+      lowerAlong==null
+        ? true
+        : lowerAlong>=-.025;
+
+    if(id==='dip'){
+      return {
+        shoulderAlong,
+        hipAlong,
+        lowerAlong,
+        wristAlong,
+        wristDrift,
+        torsoRatio,
+        driverRatio,
+        coherence,
+        shapeStable,
+        start:
+          positiveShoulder>=.035 &&
+          positiveHip>=.025 &&
+          wristDrift<=.090 &&
+          driverRatio>=1.25 &&
+          coherence &&
+          shapeStable &&
+          lowerCoherent,
+        committed:
+          positiveShoulder>=.060 &&
+          positiveHip>=.045 &&
+          wristDrift<=.105 &&
+          driverRatio>=1.35 &&
+          coherence &&
+          shapeStable &&
+          lowerCoherent,
+        valid:
+          positiveShoulder>=.090 &&
+          positiveHip>=.065 &&
+          wristDrift<=.115 &&
+          driverRatio>=1.50 &&
+          coherence &&
+          shapeStable &&
+          lowerCoherent
+      };
+    }
+
+    // Push-up: el cuerpo debe desplazarse hacia el apoyo, no la mano hacia el cuerpo.
     return {
-      shoulder,
-      hip,
-      lower,
-      lowerOk,
+      shoulderAlong,
+      hipAlong,
+      lowerAlong,
+      wristAlong,
+      wristDrift,
+      torsoRatio,
+      driverRatio,
+      coherence,
+      shapeStable,
+      start:
+        positiveShoulder>=.025 &&
+        positiveHip>=.015 &&
+        wristDrift<=.11 &&
+        driverRatio>=1.10 &&
+        shapeStable,
       committed:
-        shoulder>=.065 &&
-        hip>=.050 &&
-        lowerOk,
+        positiveShoulder>=.045 &&
+        positiveHip>=.025 &&
+        wristDrift<=.13 &&
+        driverRatio>=1.20 &&
+        shapeStable,
       valid:
-        shoulder>=.095 &&
-        hip>=.075 &&
-        lowerOk
+        positiveShoulder>=.070 &&
+        positiveHip>=.040 &&
+        wristDrift<=.14 &&
+        driverRatio>=1.25 &&
+        shapeStable
     };
   }
 
@@ -259,27 +432,14 @@
         ? Math.max(0,start-extreme)
         : 0;
 
-    const travel=Number.isFinite(c?.maxTravel)?c.maxTravel:0;
+    const motion=c?.ccBestMotion;
+    if(!motion?.committed)return false;
 
     if(id==='dip'){
-      const body=ccDipBodyEvidence(c);
-      const wristDrift=
-        Number.isFinite(c?.maxWristDrift)
-          ? c.maxWristDrift
-          : Infinity;
-
-      return !!c?.supportQualified &&
-        body.committed &&
-        wristDrift<=.15 &&
-        excursion>=Math.max(24,(r.minExcursion||40)*.58);
+      return excursion>=Math.max(24,(r.minExcursion||40)*.58);
     }
 
-    if(id==='pushup'){
-      return excursion>=Math.max(22,(r.minExcursion||45)*.50) &&
-        travel>=.035;
-    }
-
-    return true;
+    return excursion>=Math.max(22,(r.minExcursion||45)*.50);
   }
 
   const ccBaseFollowPress=followPress;
@@ -295,22 +455,19 @@
     if(!cycle){
       if(m.home){
         seedPress(m,id,now);
-
-        if(id==='dip'&&ccDipSupportGeometry(m)){
-          ccPrimeDipSupport(cycle,m,1);
-        }
+        ccPrimeSupport(cycle,m,id,1);
 
         setStatus(
           id==='dip'
-            ? 'Brazo confiable detectado. Apóyate arriba y baja cuando estés listo.'
-            : 'Brazo confiable detectado. Baja cuando estés listo.',
+            ? 'Posición arriba detectada. Baja el cuerpo manteniendo la mano fija.'
+            : 'Posición arriba detectada. Baja el cuerpo manteniendo la mano fija.',
           'ok'
         );
       }else{
         setStatus(
           id==='dip'
-            ? 'Muestra un brazo completo y sube a la posición de apoyo.'
-            : 'Muestra un brazo completo y completa la extensión.',
+            ? 'Extiende el brazo y estabiliza la mano para iniciar.'
+            : 'Completa la extensión para iniciar.',
           'warn'
         );
       }
@@ -330,81 +487,58 @@
         c.startAngle=m.elbow;
         c.startReach=m.reach;
         c.length=m.length;
+        c.motionFrames=0;
+        c.falseMotionFrames=0;
 
-        if(id==='dip'){
-          if(ccDipSupportGeometry(m)){
-            if(!c.supportAnchor){
-              ccPrimeDipSupport(c,m,1);
-            }else{
-              const drift=
-                distance(m.p.wrist,c.supportAnchor)/
-                Math.max(1,c.length);
+        if(!c.ccAnchor){
+          ccPrimeSupport(c,m,id,1);
+        }else if(ccSupportPoseStable(c,m,id)){
+          c.supportFrames=(c.supportFrames||0)+1;
 
-              const hipShift=
-                Number.isFinite(c.supportHipY)&&m.ccHip
-                  ? Math.abs(m.ccHip.y-c.supportHipY)/Math.max(1,c.length)
-                  : 0;
-
-              if(drift<=.085&&hipShift<=.08){
-                c.supportFrames=(c.supportFrames||0)+1;
-                c.supportShoulderY=m.p.shoulder.y;
-                c.supportHipY=m.ccHip.y;
-                c.supportLowerY=m.ccLowerBody?.y ?? c.supportLowerY ?? null;
-                c.supportLength=m.length;
-              }else{
-                ccPrimeDipSupport(c,m,1);
-              }
-            }
-          }else{
-            c.supportFrames=0;
-            c.supportAnchor=null;
-            c.supportShoulderY=null;
-            c.supportHipY=null;
-            c.supportLowerY=null;
+          // Refrescamos lentamente la referencia de "arriba" solo si todo sigue estable.
+          if(c.supportFrames%3===0){
+            ccPrimeSupport(c,m,id,c.supportFrames);
           }
+        }else{
+          ccPrimeSupport(c,m,id,1);
         }
       }
 
-      if(m.elbow>=r.depart)return;
-
-      if(id==='dip'&&(c.supportFrames||0)<4){
-        // Se movió el brazo, pero todavía no existe evidencia de soporte real.
+      if(m.elbow>=r.depart){
+        c.motionFrames=0;
+        c.falseMotionFrames=0;
         return;
       }
+
+      const motion=ccMotionEvidence(c,m,id);
+
+      if(motion?.start){
+        c.motionFrames=(c.motionFrames||0)+1;
+        c.falseMotionFrames=0;
+      }else{
+        c.motionFrames=0;
+        c.falseMotionFrames=(c.falseMotionFrames||0)+1;
+
+        // Si el codo se flexionó durante varios frames pero el cuerpo no descendió,
+        // esto es exactamente el caso de "subí la muñeca estando de pie".
+        // No abrir el intento y no permitir que más tarde se conecte con otra acción.
+        if(c.falseMotionFrames>=5){
+          setStatus(
+            id==='dip'
+              ? 'Sin intento: el codo cambió, pero el cuerpo no descendió.'
+              : 'Sin intento: el brazo cambió sin descenso corporal.',
+            'info'
+          );
+        }
+        return;
+      }
+
+      if(c.motionFrames<2)return;
 
       c.active=true;
       c.started=now;
       c.maxTravel=0;
-      c.maxShoulderDrop=0;
-      c.maxHipDrop=0;
-      c.maxLowerDrop=null;
-      c.maxWristDrift=0;
-      c.supportQualified=id!=='dip'||(c.supportFrames||0)>=4;
-
-      if(id==='dip'){
-        c.startShoulderY=
-          Number.isFinite(c.supportShoulderY)
-            ? c.supportShoulderY
-            : m.p.shoulder?.y;
-
-        c.startHipY=
-          Number.isFinite(c.supportHipY)
-            ? c.supportHipY
-            : m.ccHip?.y;
-
-        c.startLowerY=
-          Number.isFinite(c.supportLowerY)
-            ? c.supportLowerY
-            : (m.ccLowerBody?.y ?? null);
-
-        c.startWrist=
-          c.supportAnchor
-            ? {...c.supportAnchor}
-            : (m.p.wrist
-                ? {x:m.p.wrist.x,y:m.p.wrist.y}
-                : null);
-      }
-
+      c.ccBestMotion=motion;
       resetAttemptMetrics();
     }
 
@@ -415,6 +549,24 @@
     ){
       loseAttempt();
       return;
+    }
+
+    const motion=ccMotionEvidence(c,m,id);
+
+    // Si la mano deja de comportarse como apoyo o el cuerpo deja de ser coherente,
+    // preferimos cancelar silenciosamente antes que fabricar REP/NO REP.
+    if(!motion||motion.wristDrift>(id==='dip'?.17:.18)||!motion.shapeStable){
+      loseAttempt();
+      setStatus('Se perdió el punto de apoyo. Recolócate y vuelve a iniciar.','warn');
+      return;
+    }
+
+    if(
+      !c.ccBestMotion ||
+      ((motion.shoulderAlong??0)+(motion.hipAlong??0)) >
+      ((c.ccBestMotion.shoulderAlong??0)+(c.ccBestMotion.hipAlong??0))
+    ){
+      c.ccBestMotion=motion;
     }
 
     c.samples++;
@@ -430,59 +582,14 @@
     const travel=(c.startReach-c.minReach)/c.length;
     c.maxTravel=Math.max(c.maxTravel||0,travel);
 
-    let supportedMotion=true;
-
-    if(id==='dip'){
-      const sh=m.p?.shoulder;
-      const hip=m.ccHip;
-      const lower=m.ccLowerBody;
-      const wr=m.p?.wrist;
-
-      if(sh&&Number.isFinite(c.startShoulderY)){
-        c.maxShoulderDrop=Math.max(
-          c.maxShoulderDrop||0,
-          (sh.y-c.startShoulderY)/c.length
-        );
-      }
-
-      if(hip&&Number.isFinite(c.startHipY)){
-        c.maxHipDrop=Math.max(
-          c.maxHipDrop||0,
-          (hip.y-c.startHipY)/c.length
-        );
-      }
-
-      if(
-        lower &&
-        Number.isFinite(c.startLowerY)
-      ){
-        const d=(lower.y-c.startLowerY)/c.length;
-        c.maxLowerDrop=
-          Number.isFinite(c.maxLowerDrop)
-            ? Math.max(c.maxLowerDrop,d)
-            : d;
-      }
-
-      if(wr&&c.startWrist){
-        c.maxWristDrift=Math.max(
-          c.maxWristDrift||0,
-          distance(wr,c.startWrist)/c.length
-        );
-      }
-
-      const body=ccDipBodyEvidence(c);
-
-      supportedMotion=
-        body.valid &&
-        (c.maxWristDrift||0)<=.15;
-    }
-
-    // RULES sigue decidiendo extensión, fondo y ROM.
+    // RULES sigue decidiendo ángulo/profundidad/ROM.
+    // motion.valid solamente comprueba que el cuerpo, y no la muñeca,
+    // haya provocado ese cambio articular.
     if(
       m.away &&
       excursion>=r.minExcursion &&
       travel>=.10 &&
-      supportedMotion
+      motion.valid
     ){
       c.hit=true;
     }
@@ -504,12 +611,7 @@
         good ||
         ccPressCommitted(c,id,r);
 
-      const carrySupport=
-        id==='dip' &&
-        ccDipSupportGeometry(m);
-
       const min=c.extreme;
-
       const reason=
         c.badForm
           ? 'se perdió la alineación'
@@ -518,18 +620,12 @@
             : 'recorrido demasiado breve';
 
       seedPress(m,id,now);
-
-      if(carrySupport){
-        ccPrimeDipSupport(cycle,m,4);
-      }
-
+      ccPrimeSupport(cycle,m,id,2);
       trackMinAngle(min);
 
       if(!committed){
         setStatus(
-          id==='dip'
-            ? 'Sin intento: esperando descenso real del cuerpo.'
-            : 'Sin intento: listo para la siguiente repetición.',
+          'Sin intento: el movimiento no tuvo suficiente desplazamiento corporal.',
           'ok'
         );
         return null;
@@ -557,14 +653,14 @@
     if(!m){
       if(cycle?.active){
         setStatus(
-          'Mantén visible el mismo brazo completo para terminar la repetición.',
+          'Mantén visible el mismo brazo y el punto de apoyo.',
           'warn'
         );
       }else{
         setStatus(
           id==='dip'
-            ? 'Esperando un brazo completo y confiable sobre las barras.'
-            : 'Esperando un brazo completo y confiable.',
+            ? 'Esperando un brazo completo, estable y una mano de apoyo.'
+            : 'Esperando un brazo completo y estable.',
           'info'
         );
       }
