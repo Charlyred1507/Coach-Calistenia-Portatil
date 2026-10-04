@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.0.1';
+  const COACH_VERSION = '1.1.0';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -259,6 +259,19 @@
     padding:10px 12px;font-size:13px;font-weight:800;line-height:1.35;backdrop-filter:blur(9px)
   }
   .cc-coach::before{content:'COACH';display:block;color:var(--cc-green);font-size:9px;letter-spacing:.12em;margin-bottom:3px}
+  .cc-video-controls{
+    position:absolute;left:10px;right:10px;bottom:calc(max(10px,env(safe-area-inset-bottom)) + 70px);
+    display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;pointer-events:auto
+  }
+  .cc-video-controls[hidden]{display:none!important}
+  .cc-video-controls button{
+    min-height:48px;border-radius:14px;border:1px solid var(--cc-line);
+    color:white;background:rgba(12,18,27,.94);font-weight:850;padding:8px 10px
+  }
+  .cc-video-time{
+    min-width:78px;padding:8px 10px;border:1px solid var(--cc-line);border-radius:12px;
+    background:rgba(7,10,15,.82);font-size:11px;font-variant-numeric:tabular-nums;text-align:center
+  }
   .cc-bottom{
     position:absolute;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));
     display:grid;grid-template-columns:52px 1fr 1fr;gap:8px;pointer-events:auto
@@ -304,6 +317,7 @@
   let repInProgress=null;
   let lastPrimaryAngle=null;
   let recentHighAngle=null;
+  let videoResetInProgress=false;
 
   function exerciseName(id=exerciseSelect.value){
     return EXERCISES?.[id]?.name || exerciseSelect.selectedOptions?.[0]?.textContent || id;
@@ -311,11 +325,20 @@
   function isHoldExercise(id=exerciseSelect.value){
     try { return typeof isHold==='function' && isHold(id); } catch (_) { return ['frontlever','handstand'].includes(id); }
   }
+  function isClipMode(){
+    try{return typeof inputMode!=='undefined' && inputMode==='clip'}catch(_){return false}
+  }
   function sourceNow(){
     try{
-      if (typeof inputMode!=='undefined' && inputMode==='clip') return video.currentTime*1000;
+      if (isClipMode()) return video.currentTime*1000;
     }catch(_){}
     return performance.now();
+  }
+  function resetMetricAttempt(){
+    lastSampleAt=-Infinity;
+    repInProgress=null;
+    lastPrimaryAngle=null;
+    recentHighAngle=null;
   }
   function newSession(){
     const now=Date.now();
@@ -679,7 +702,7 @@
     <div class="cc-shell">
       <div class="cc-brand">Calicoach AI · ${COACH_VERSION}</div>
       <h1 class="cc-title">Tu coach de calistenia con cámara</h1>
-      <p class="cc-sub">Conteo, validación y feedback en tiempo real usando exactamente el mismo motor de jueceo que ya calibraste.</p>
+      <p class="cc-sub">Conteo, validación y feedback en tiempo real.</p>
       <div class="cc-card">
         <label class="cc-label" for="ccHomeExercise">Ejercicio</label>
         <select id="ccHomeExercise" class="cc-select"></select>
@@ -735,6 +758,82 @@
 
   /* --------------------------- LIVE HUD --------------------------- */
   let hud=null;
+
+  function syncVideoControls(){
+    if(!hud)return;
+    const box=$c('ccVideoControls');
+    if(!box)return;
+    const clip=isClipMode();
+    box.hidden=!clip;
+    const play=$c('ccVideoPlayPause');
+    const finish=$c('ccFinish');
+    if(play){
+      play.textContent=video.ended?'▶ Reproducir':(video.paused?'▶ Continuar':'⏸ Pausa');
+    }
+    const dur=Number.isFinite(video.duration)?video.duration:0;
+    const cur=Number.isFinite(video.currentTime)?video.currentTime:0;
+    const time=$c('ccVideoTime');
+    if(time)time.textContent=`${cur.toFixed(1)} / ${dur.toFixed(1)} s`;
+    if(finish)finish.textContent=clip?'Ver resumen':'Terminar serie';
+  }
+
+  async function restartVideoAnalysis(){
+    if(!isClipMode())return;
+    videoResetInProgress=true;
+    collecting=false;
+    try{
+      video.pause();
+      const seek=$c('clipSeek');
+      if(seek){
+        seek.value='0';
+        if(typeof seek.onchange==='function')seek.onchange();
+        else video.currentTime=0;
+      }else{
+        try{resetJudge()}catch(_){}
+        video.currentTime=0;
+      }
+      resetMetricAttempt();
+      newSession();
+      await video.play();
+    }catch(e){
+      console.error('[Calicoach] No se pudo reiniciar el video.',e);
+      updateCoach('No se pudo reiniciar el video. Intenta nuevamente.','warn');
+    }finally{
+      setTimeout(()=>{videoResetInProgress=false},0);
+      syncVideoControls();
+      updateHud(true);
+    }
+  }
+
+  async function toggleVideoPlayback(){
+    if(!isClipMode())return;
+    try{
+      if(video.ended){
+        await restartVideoAnalysis();
+        return;
+      }
+      try{
+        if(typeof advPending!=='undefined'&&advPending){
+          updateCoach('Hay una revisión pendiente. Resuélvela antes de continuar el video.','warn');
+          return;
+        }
+      }catch(_){}
+      resetMetricAttempt();
+      const corePause=$c('clipPause');
+      if(corePause&&typeof corePause.onclick==='function'){
+        await corePause.onclick();
+      }else if(video.paused){
+        await video.play();
+      }else{
+        video.pause();
+      }
+    }catch(e){
+      console.error('[Calicoach] Error al pausar/reanudar video.',e);
+    }finally{
+      syncVideoControls();
+    }
+  }
+
   function ensureHud(){
     if(hud)return;
     hud=document.createElement('div');
@@ -756,6 +855,11 @@
         <div class="cc-metric"><span>Fatiga</span><strong id="ccFatigue">—</strong></div>
       </div>
       <div class="cc-coach"><span id="ccCoachText">Adopta la posición inicial.</span></div>
+      <div id="ccVideoControls" class="cc-video-controls" hidden>
+        <button id="ccVideoPlayPause" type="button">⏸ Pausa</button>
+        <button id="ccVideoReplay" type="button">↺ Desde inicio</button>
+        <span id="ccVideoTime" class="cc-video-time">0.0 / 0.0 s</span>
+      </div>
       <div class="cc-bottom">
         <button id="ccReset" aria-label="Reiniciar serie">↻</button>
         <button id="ccSwitchSource">Video</button>
@@ -794,7 +898,7 @@
       newSession();
     };
     $c('ccSwitchSource').onclick=()=>{
-      if(typeof inputMode!=='undefined'&&inputMode==='clip'){
+      if(isClipMode()){
         $c('returnCamera')?.click();
         newSession();
       }else{
@@ -802,11 +906,32 @@
       }
     };
     $c('ccFinish').onclick=finishSeries;
+    $c('ccVideoPlayPause').onclick=toggleVideoPlayback;
+    $c('ccVideoReplay').onclick=restartVideoAnalysis;
 
-    video.addEventListener('seeking',()=>{if(collecting)newSession()});
+    video.addEventListener('loadedmetadata',()=>{
+      if(isClipMode()){
+        resetMetricAttempt();
+        newSession();
+        syncVideoControls();
+      }
+    });
+    video.addEventListener('seeking',()=>{
+      if(isClipMode()&&collecting&&!videoResetInProgress)newSession();
+      syncVideoControls();
+    });
+    video.addEventListener('play',syncVideoControls);
+    video.addEventListener('pause',()=>{
+      if(isClipMode())resetMetricAttempt();
+      syncVideoControls();
+    });
+    video.addEventListener('timeupdate',syncVideoControls);
     video.addEventListener('ended',()=>{
-      if(typeof inputMode!=='undefined'&&inputMode==='clip'&&collecting){
-        setTimeout(()=>finishSeries(),120);
+      if(isClipMode()){
+        resetMetricAttempt();
+        updateCoach('Video terminado. Puedes reproducirlo de nuevo o abrir el resumen.','info');
+        syncVideoControls();
+        updateHud(true);
       }
     });
   }
@@ -822,7 +947,8 @@
     const con=consistencyScore();
     $c('ccConsistency').textContent=Number.isFinite(con)?fmt0(con,'%'):'—';
     $c('ccFatigue').textContent=fatigueText();
-    $c('ccSwitchSource').textContent=(typeof inputMode!=='undefined'&&inputMode==='clip')?'Cámara':'Video';
+    $c('ccSwitchSource').textContent=isClipMode()?'Cámara':'Video';
+    syncVideoControls();
   }
   setInterval(()=>{if(collecting)updateHud()},500);
 
@@ -898,15 +1024,19 @@
           </div>
         </div>`:''}
         <div class="cc-actions two">
-          <button id="ccNewSeries" class="cc-button primary">Nueva serie</button>
+          <button id="ccNewSeries" class="cc-button primary">${s.source==='clip'?'↺ Analizar de nuevo':'Nueva serie'}</button>
           <button id="ccSummaryHome" class="cc-button secondary">Inicio</button>
         </div>
         <div id="ccAdSummary"></div>
       </div>`;
     summaryScreen.hidden=false;
     renderAd($c('ccAdSummary'),'summary');
-    $c('ccNewSeries').onclick=()=>{
+    $c('ccNewSeries').onclick=async()=>{
       summaryScreen.hidden=true;
+      if(s.source==='clip'&&isClipMode()){
+        await restartVideoAnalysis();
+        return;
+      }
       try{resetJudge()}catch(_){}
       newSession();
     };
