@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.1.0';
+  const COACH_VERSION = '1.2.0';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -260,17 +260,43 @@
   }
   .cc-coach::before{content:'COACH';display:block;color:var(--cc-green);font-size:9px;letter-spacing:.12em;margin-bottom:3px}
   .cc-video-controls{
-    position:absolute;left:10px;right:10px;bottom:calc(max(10px,env(safe-area-inset-bottom)) + 70px);
-    display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;pointer-events:auto
+    position:absolute;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));
+    display:grid;grid-template-columns:minmax(0,1.45fr) repeat(3,minmax(64px,.72fr));
+    gap:7px;align-items:stretch;pointer-events:auto
   }
   .cc-video-controls[hidden]{display:none!important}
   .cc-video-controls button{
-    min-height:48px;border-radius:14px;border:1px solid var(--cc-line);
-    color:white;background:rgba(12,18,27,.94);font-weight:850;padding:8px 10px
+    min-height:58px;border-radius:15px;border:1px solid var(--cc-line);
+    color:white;background:rgba(12,18,27,.95);font-weight:850;padding:7px 8px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:2px;line-height:1.05;white-space:nowrap
   }
-  .cc-video-time{
-    min-width:78px;padding:8px 10px;border:1px solid var(--cc-line);border-radius:12px;
-    background:rgba(7,10,15,.82);font-size:11px;font-variant-numeric:tabular-nums;text-align:center
+  .cc-video-controls button > span{font-size:14px}
+  .cc-video-controls button > small{font-size:9px;color:var(--cc-muted);font-weight:750}
+  .cc-video-controls .cc-video-primary{
+    align-items:flex-start;padding-left:14px
+  }
+  .cc-video-controls .cc-video-primary > span{font-size:15px}
+  .cc-video-controls .cc-video-primary > small{
+    font-size:10px;font-variant-numeric:tabular-nums
+  }
+  .cc-video-controls .cc-video-summary{
+    background:#eef4f8;color:#0a1018;border-color:#eef4f8
+  }
+  .cc-video-controls .cc-video-summary small{color:#59636e}
+  body.cc-clip-mode .cc-bottom{display:none!important}
+  body.cc-clip-mode #status{display:none!important}
+  body.cc-clip-mode .cc-coach{
+    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 166px)
+  }
+  @media(max-width:420px){
+    .cc-video-controls{
+      left:6px;right:6px;gap:5px;
+      grid-template-columns:minmax(0,1.35fr) repeat(3,58px)
+    }
+    .cc-video-controls button{min-height:56px;padding:6px 5px}
+    .cc-video-controls button > span{font-size:12px}
+    .cc-video-controls .cc-video-primary > span{font-size:14px}
   }
   .cc-bottom{
     position:absolute;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));
@@ -765,16 +791,20 @@
     if(!box)return;
     const clip=isClipMode();
     box.hidden=!clip;
-    const play=$c('ccVideoPlayPause');
-    const finish=$c('ccFinish');
-    if(play){
-      play.textContent=video.ended?'▶ Reproducir':(video.paused?'▶ Continuar':'⏸ Pausa');
+    document.body.classList.toggle('cc-clip-mode',clip);
+
+    const label=$c('ccVideoPlayLabel');
+    if(label){
+      label.textContent=video.ended?'▶ Reproducir':(video.paused?'▶ Continuar':'⏸ Pausa');
     }
+
     const dur=Number.isFinite(video.duration)?video.duration:0;
     const cur=Number.isFinite(video.currentTime)?video.currentTime:0;
     const time=$c('ccVideoTime');
     if(time)time.textContent=`${cur.toFixed(1)} / ${dur.toFixed(1)} s`;
-    if(finish)finish.textContent=clip?'Ver resumen':'Terminar serie';
+
+    const finish=$c('ccFinish');
+    if(finish)finish.textContent='Terminar serie';
   }
 
   async function restartVideoAnalysis(){
@@ -834,6 +864,22 @@
     }
   }
 
+  async function chooseAnotherVideo(){
+    if(!isClipMode())return;
+    try{
+      if(!video.paused&&!video.ended){
+        await toggleVideoPlayback();
+      }
+    }catch(_){}
+    const input=$c('referenceClip');
+    if(!input){
+      updateCoach('No se encontró el selector de video.','warn');
+      return;
+    }
+    input.value='';
+    input.click();
+  }
+
   function ensureHud(){
     if(hud)return;
     hud=document.createElement('div');
@@ -856,9 +902,19 @@
       </div>
       <div class="cc-coach"><span id="ccCoachText">Adopta la posición inicial.</span></div>
       <div id="ccVideoControls" class="cc-video-controls" hidden>
-        <button id="ccVideoPlayPause" type="button">⏸ Pausa</button>
-        <button id="ccVideoReplay" type="button">↺ Desde inicio</button>
-        <span id="ccVideoTime" class="cc-video-time">0.0 / 0.0 s</span>
+        <button id="ccVideoPlayPause" class="cc-video-primary" type="button">
+          <span id="ccVideoPlayLabel">⏸ Pausa</span>
+          <small id="ccVideoTime">0.0 / 0.0 s</small>
+        </button>
+        <button id="ccVideoReplay" type="button" aria-label="Reproducir desde el inicio">
+          <span>↺</span><small>Inicio</small>
+        </button>
+        <button id="ccChooseAnotherVideo" type="button" aria-label="Seleccionar otro video">
+          <span>🎞</span><small>Otro</small>
+        </button>
+        <button id="ccVideoSummary" class="cc-video-summary" type="button" aria-label="Ver resumen">
+          <span>✓</span><small>Resumen</small>
+        </button>
       </div>
       <div class="cc-bottom">
         <button id="ccReset" aria-label="Reiniciar serie">↻</button>
@@ -908,6 +964,8 @@
     $c('ccFinish').onclick=finishSeries;
     $c('ccVideoPlayPause').onclick=toggleVideoPlayback;
     $c('ccVideoReplay').onclick=restartVideoAnalysis;
+    $c('ccChooseAnotherVideo').onclick=chooseAnotherVideo;
+    $c('ccVideoSummary').onclick=finishSeries;
 
     video.addEventListener('loadedmetadata',()=>{
       if(isClipMode()){
@@ -929,7 +987,7 @@
     video.addEventListener('ended',()=>{
       if(isClipMode()){
         resetMetricAttempt();
-        updateCoach('Video terminado. Puedes reproducirlo de nuevo o abrir el resumen.','info');
+        updateCoach('Video terminado. Puedes reproducirlo, analizar otro video o ver el resumen.','info');
         syncVideoControls();
         updateHud(true);
       }
