@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.2.0';
+  const COACH_VERSION = '1.3.1';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -46,6 +46,182 @@
     console.error('[Calicoach] El core V10 no está listo. Carga coach-ui.js al final de <body>.');
     return;
   }
+
+  /* ------------------ V1.3 ATTEMPT QUALITY GATE ------------------
+     Mantiene RULES y sus umbrales geométricos.
+     Solo mejora cuándo un movimiento se considera un intento real.
+     - Fondos: exige posición de apoyo + descenso real del cuerpo respecto a la mano.
+     - Push-ups/fondos: micro-movimientos no generan NO REP.
+  ---------------------------------------------------------------- */
+  function ccDipSupportGeometry(m){
+    const sh=m?.p?.shoulder, wr=m?.p?.wrist;
+    if(!sh||!wr||!Number.isFinite(m?.length)||m.length<=0)return false;
+    const horizontal=Math.abs(wr.x-sh.x)/m.length;
+    const vertical=(wr.y-sh.y)/m.length;
+    return horizontal<=.48 && vertical>=.22;
+  }
+
+  function ccPrimeDipSupport(c,m,frames=1){
+    if(!c||!m?.p?.wrist||!m?.p?.shoulder)return;
+    c.supportFrames=frames;
+    c.supportAnchor={x:m.p.wrist.x,y:m.p.wrist.y};
+    c.supportShoulderY=m.p.shoulder.y;
+    c.supportLength=m.length;
+  }
+
+  function ccPressCommitted(c,id,r){
+    const start=Number.isFinite(c?.startAngle)?c.startAngle:null;
+    const extreme=Number.isFinite(c?.extreme)?c.extreme:start;
+    const excursion=Number.isFinite(start)&&Number.isFinite(extreme)?Math.max(0,start-extreme):0;
+    const travel=Number.isFinite(c?.maxTravel)?c.maxTravel:0;
+
+    if(id==='dip'){
+      const bodyDrop=Number.isFinite(c?.maxBodyDrop)?c.maxBodyDrop:0;
+      const wristDrift=Number.isFinite(c?.maxWristDrift)?c.maxWristDrift:Infinity;
+      return !!c?.supportQualified &&
+        bodyDrop>=.06 &&
+        wristDrift<=.24 &&
+        excursion>=Math.max(20,(r.minExcursion||40)*.45);
+    }
+
+    if(id==='pushup'){
+      return excursion>=Math.max(20,(r.minExcursion||45)*.45) && travel>=.025;
+    }
+
+    return true;
+  }
+
+  const ccBaseFollowPress=followPress;
+  followPress=function(m,id,now,emit=true){
+    const r=RULES[id];
+    if(!r||!m)return ccBaseFollowPress(m,id,now,emit);
+
+    if(cycle&&(cycle.kind!==id||now-cycle.last>350||now<cycle.last))loseAttempt();
+
+    if(!cycle){
+      if(m.home){
+        seedPress(m,id,now);
+        if(id==='dip'&&ccDipSupportGeometry(m))ccPrimeDipSupport(cycle,m,1);
+        setStatus(id==='dip'?'Apóyate estable arriba y baja cuando estés listo.':'Listo. Baja sin detenerte.','ok');
+      }else{
+        setStatus(id==='dip'?'Sube a una posición de apoyo estable para iniciar.':'Completa la extensión para iniciar; no necesitas detenerte.','warn');
+      }
+      return;
+    }
+
+    const c=cycle,dt=now-c.last;
+    c.last=now;
+    if(m.side!==lockedSide){loseAttempt();return;}
+
+    if(!c.active){
+      if(m.home){
+        c.startAngle=m.elbow;
+        c.startReach=m.reach;
+        c.length=m.length;
+
+        if(id==='dip'){
+          if(ccDipSupportGeometry(m)){
+            if(!c.supportAnchor){
+              ccPrimeDipSupport(c,m,1);
+            }else{
+              const drift=distance(m.p.wrist,c.supportAnchor)/Math.max(1,c.length);
+              if(drift<=.12){
+                c.supportFrames=(c.supportFrames||0)+1;
+                c.supportShoulderY=m.p.shoulder.y;
+                c.supportLength=m.length;
+              }else{
+                ccPrimeDipSupport(c,m,1);
+              }
+            }
+          }else{
+            c.supportFrames=0;
+            c.supportAnchor=null;
+            c.supportShoulderY=null;
+          }
+        }
+      }
+
+      if(m.elbow>=r.depart)return;
+
+      if(id==='dip'&&(c.supportFrames||0)<2){
+        // Está flexionando el brazo, pero todavía no vemos un apoyo estable.
+        // No es una rep ni un NO REP.
+        return;
+      }
+
+      c.active=true;
+      c.started=now;
+      c.maxTravel=0;
+      c.maxBodyDrop=0;
+      c.maxWristDrift=0;
+      c.supportQualified=id!=='dip'||(c.supportFrames||0)>=2;
+
+      if(id==='dip'){
+        c.startShoulderY=Number.isFinite(c.supportShoulderY)?c.supportShoulderY:m.p.shoulder?.y;
+        c.startWrist=c.supportAnchor?{...c.supportAnchor}:
+          (m.p.wrist?{x:m.p.wrist.x,y:m.p.wrist.y}:null);
+      }
+      resetAttemptMetrics();
+    }
+
+    if(now-c.started>10000||m.length/c.length<.6||m.length/c.length>1.65){
+      loseAttempt();
+      return;
+    }
+
+    c.samples++;
+    c.extreme=Math.min(c.extreme,m.elbow);
+    c.minReach=Math.min(c.minReach,m.reach);
+    c.faultMs=m.form?0:c.faultMs+Math.min(dt,100);
+    if(c.faultMs>=150)c.badForm=true;
+    trackMinAngle(m.elbow);
+
+    const excursion=c.startAngle-c.extreme;
+    const travel=(c.startReach-c.minReach)/c.length;
+    c.maxTravel=Math.max(c.maxTravel||0,travel);
+
+    let supportedMotion=true;
+    if(id==='dip'){
+      const sh=m.p?.shoulder,wr=m.p?.wrist;
+      if(sh&&Number.isFinite(c.startShoulderY)){
+        c.maxBodyDrop=Math.max(c.maxBodyDrop||0,(sh.y-c.startShoulderY)/c.length);
+      }
+      if(wr&&c.startWrist){
+        c.maxWristDrift=Math.max(c.maxWristDrift||0,distance(wr,c.startWrist)/c.length);
+      }
+      supportedMotion=(c.maxBodyDrop||0)>=.06 && (c.maxWristDrift||0)<=.24;
+    }
+
+    // Los mismos criterios geométricos siguen decidiendo la rep válida.
+    if(m.away&&excursion>=r.minExcursion&&travel>=.10&&supportedMotion)c.hit=true;
+
+    phase=c.hit?'UP':'DOWN';
+    setProgress((r.home-m.elbow)/(r.home-r.away)*100,phaseLabel());
+
+    if(m.home){
+      const good=c.hit&&!c.badForm&&c.samples>=3&&now-c.started>=180;
+      const committed=good||ccPressCommitted(c,id,r);
+      const carrySupport=id==='dip'&&ccDipSupportGeometry(m);
+      const min=c.extreme;
+      const reason=c.badForm?'se perdió la alineación':
+        !c.hit?'faltó profundidad o recorrido':'recorrido demasiado breve';
+
+      seedPress(m,id,now);
+      if(carrySupport)ccPrimeDipSupport(cycle,m,2);
+      trackMinAngle(min);
+
+      if(!committed){
+        setStatus(id==='dip'?'Apoyo detectado. Baja cuando quieras iniciar la repetición.':'Listo para la siguiente repetición.','ok');
+        return null;
+      }
+
+      if(emit){
+        if(good)validRep();
+        else noRep(reason);
+      }
+      return {good,reason,min};
+    }
+  };
 
   /* ---------------------------- ADS ---------------------------- */
   const AD_CFG = Object.assign({
@@ -253,6 +429,36 @@
   }
   .cc-metric span{display:block;font-size:10px;color:var(--cc-muted);line-height:1.2}
   .cc-metric strong{display:block;margin-top:3px;font-size:15px}
+  .cc-metric{
+    --metric-hue:210;
+    --metric-sat:12%;
+    --metric-light:72%;
+    transition:background-color .38s ease,border-color .38s ease,box-shadow .38s ease;
+  }
+  .cc-metric strong{
+    transition:color .38s ease;
+  }
+  .cc-metric[data-quality]{
+    border-color:hsl(var(--metric-hue) 78% 52% / .58);
+    background:
+      linear-gradient(
+        135deg,
+        hsl(var(--metric-hue) 62% 20% / .72),
+        rgba(7,10,15,.84)
+      );
+    box-shadow:inset 0 0 0 1px hsl(var(--metric-hue) 70% 48% / .10);
+  }
+  .cc-metric[data-quality] strong{
+    color:hsl(var(--metric-hue) 88% 68%);
+  }
+  .cc-metric[data-quality="neutral"]{
+    border-color:var(--cc-line);
+    background:rgba(7,10,15,.78);
+    box-shadow:none;
+  }
+  .cc-metric[data-quality="neutral"] strong{
+    color:var(--cc-text);
+  }
   .cc-coach{
     position:absolute;left:12px;right:12px;bottom:calc(max(12px,env(safe-area-inset-bottom)) + 238px);
     border:1px solid var(--cc-line);background:rgba(7,10,15,.82);border-radius:16px;
@@ -895,10 +1101,10 @@
         <span id="ccRepLabel" class="cc-replabel">reps</span>
       </div>
       <div class="cc-metrics">
-        <div class="cc-metric"><span>Última rep</span><strong id="ccLastRep">—</strong></div>
-        <div class="cc-metric"><span>ROM</span><strong id="ccRom">—</strong></div>
-        <div class="cc-metric"><span>Consistencia</span><strong id="ccConsistency">—</strong></div>
-        <div class="cc-metric"><span>Fatiga</span><strong id="ccFatigue">—</strong></div>
+        <div id="ccSpeedCard" class="cc-metric" data-quality="neutral"><span>Velocidad</span><strong id="ccSpeed">—</strong></div>
+        <div id="ccRomCard" class="cc-metric" data-quality="neutral"><span>ROM</span><strong id="ccRom">—</strong></div>
+        <div id="ccTempoCard" class="cc-metric" data-quality="neutral"><span>Tempo</span><strong id="ccTempo">—</strong></div>
+        <div id="ccFatigueCard" class="cc-metric" data-quality="neutral"><span>Fatiga</span><strong id="ccFatigue">—</strong></div>
       </div>
       <div class="cc-coach"><span id="ccCoachText">Adopta la posición inicial.</span></div>
       <div id="ccVideoControls" class="cc-video-controls" hidden>
@@ -994,17 +1200,129 @@
     });
   }
 
+  function setMetricQuality(id,score=null){
+    const el=$c(id);
+    if(!el)return;
+
+    if(!Number.isFinite(score)){
+      el.dataset.quality='neutral';
+      el.style.removeProperty('--metric-hue');
+      el.style.removeProperty('--metric-sat');
+      el.style.removeProperty('--metric-light');
+      return;
+    }
+
+    const q=clampCoach(score,0,100);
+
+    // Escala continua:
+    // 0 = rojo, 25 = naranja, 50 = amarillo,
+    // 75 = amarillo-verde, 100 = verde.
+    const hue=q*1.20;
+
+    el.dataset.quality=q.toFixed(0);
+    el.style.setProperty('--metric-hue',hue.toFixed(1));
+    el.style.setProperty('--metric-sat','82%');
+    el.style.setProperty('--metric-light','64%');
+  }
+
+  function repTempoShort(rep){
+    if(!rep)return '—';
+    const d=rep.lowering,u=rep.rising;
+    if(Number.isFinite(d)&&Number.isFinite(u))return `${d.toFixed(1)}↓ · ${u.toFixed(1)}↑`;
+    if(Number.isFinite(u))return `${u.toFixed(1)}↑`;
+    if(Number.isFinite(d))return `${d.toFixed(1)}↓`;
+    return '—';
+  }
+
+  function romMinimumFor(id){
+    try{
+      if(typeof RULES!=='undefined'&&Number.isFinite(RULES?.[id]?.minExcursion))return RULES[id].minExcursion;
+      if(id==='hspu'&&typeof HSPU_RULES!=='undefined'&&Number.isFinite(HSPU_RULES.minExcursion))return HSPU_RULES.minExcursion;
+      if(id==='pistolsquat'&&typeof PISTOL_V103!=='undefined'&&Number.isFinite(PISTOL_V103.minExcursion))return PISTOL_V103.minExcursion;
+    }catch(_){}
+    return null;
+  }
+
+  function romQuality(rep){
+    if(!rep||!Number.isFinite(rep.rom))return null;
+    const min=romMinimumFor(exerciseSelect.value);
+    if(!Number.isFinite(min)||min<=0)return null;
+
+    const ratio=rep.rom/min;
+    if(ratio<=.70)return 0;
+    if(ratio<1.00)return (ratio-.70)/.30*65;
+    if(ratio<1.20)return 65+(ratio-1.00)/.20*35;
+    return 100;
+  }
+
+  function speedQuality(rep){
+    if(!rep||!Number.isFinite(rep.speed)||!session?.reps?.length)return null;
+    const previous=session.reps.slice(0,-1).map(r=>r.speed).filter(Number.isFinite);
+    if(!previous.length)return null;
+
+    const base=mean(previous.slice(0,Math.min(3,previous.length)));
+    if(!Number.isFinite(base)||base<=0)return null;
+
+    const ratio=rep.speed/base;
+    if(ratio<=.60)return 0;
+    if(ratio<.75)return (ratio-.60)/.15*35;
+    if(ratio<.90)return 35+(ratio-.75)/.15*40;
+    if(ratio<1.00)return 75+(ratio-.90)/.10*25;
+    return 100;
+  }
+
+  function tempoQuality(rep){
+    if(!rep)return null;
+    const previous=session?.reps?.slice(0,-1)||[];
+    if(!previous.length)return null;
+
+    const phaseDev=[];
+
+    if(Number.isFinite(rep.lowering)){
+      const vals=previous.map(r=>r.lowering).filter(v=>Number.isFinite(v)&&v>.05);
+      const ref=median(vals);
+      if(Number.isFinite(ref)&&ref>.05)phaseDev.push(Math.abs(rep.lowering-ref)/ref);
+    }
+
+    if(Number.isFinite(rep.rising)){
+      const vals=previous.map(r=>r.rising).filter(v=>Number.isFinite(v)&&v>.05);
+      const ref=median(vals);
+      if(Number.isFinite(ref)&&ref>.05)phaseDev.push(Math.abs(rep.rising-ref)/ref);
+    }
+
+    if(!phaseDev.length)return null;
+
+    const dev=mean(phaseDev);
+    return clampCoach(100-(dev/.65)*100,0,100);
+  }
+
+  function fatigueQuality(){
+    const f=fatiguePct();
+    if(!Number.isFinite(f))return null;
+
+    if(f<=0)return 100;
+    if(f<=5)return 100-f*2;
+    if(f<=15)return 90-(f-5)*3;
+    if(f<=25)return 60-(f-15)*4;
+    return clampCoach(20-(f-25)*2,0,20);
+  }
+
   function updateHud(force=false){
     if(!hud||!session)return;
     const current=typeof reps!=='undefined'?reps:session.reps.length;
     $c('ccRepNum').textContent=String(current);
     $c('ccRepLabel').textContent=isHoldExercise()?'seg / créditos':'reps';
     const last=session.reps[session.reps.length-1];
-    $c('ccLastRep').textContent=last?fmt1(last.duration,'s'):'—';
+    $c('ccSpeed').textContent=last&&Number.isFinite(last.speed)?fmt0(last.speed,'°/s'):'—';
     $c('ccRom').textContent=last&&Number.isFinite(last.rom)?fmt0(last.rom,'°'):'—';
-    const con=consistencyScore();
-    $c('ccConsistency').textContent=Number.isFinite(con)?fmt0(con,'%'):'—';
+    $c('ccTempo').textContent=repTempoShort(last);
     $c('ccFatigue').textContent=fatigueText();
+
+    setMetricQuality('ccSpeedCard',speedQuality(last));
+    setMetricQuality('ccRomCard',romQuality(last));
+    setMetricQuality('ccTempoCard',tempoQuality(last));
+    setMetricQuality('ccFatigueCard',fatigueQuality());
+
     $c('ccSwitchSource').textContent=isClipMode()?'Cámara':'Video';
     syncVideoControls();
   }
