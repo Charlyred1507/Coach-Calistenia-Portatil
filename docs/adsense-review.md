@@ -2,7 +2,7 @@
 
 El correo de Google confirma que el sitio sigue en revisión; no es una notificación de rechazo. Recomienda contenido original y útil, Quiénes somos y Contacto, navegación clara, rapidez, SEO básico, variedad y mantenimiento editorial.
 
-## Cambios preparados y comprobaciones
+## Cambios publicados en GitHub y comprobaciones
 
 | Recomendación | Resultado en esta versión |
 | --- | --- |
@@ -17,7 +17,8 @@ El correo de Google confirma que el sitio sigue en revisión; no es una notifica
 
 ## Pendiente de publicación y cuenta
 
-- La web principal se sirve separadamente de la raíz de GitHub Pages. El cambio en GitHub permite revisar `/website/`, pero para actualizar `calirepsai.com` hay que publicar `website/` en su proyecto de Cloudflare.
+- El push del 8 de octubre se publicó correctamente. GitHub Pages y el check `Workers Builds: coach-calistenia-portatil` terminaron con éxito. La app en `app.calirepsai.com` y su carpeta `/website/` muestran los cambios; las 20 páginas HTML y cinco archivos de apoyo de la vista de GitHub Pages respondieron 200.
+- `calirepsai.com` seguía mostrando la portada anterior y `/about.html` respondía 404 incluso al renovar la solicitud. Para actualizarlo hay que identificar el proyecto de Cloudflare que tiene asignado ese dominio y publicar allí `website/` como raíz desde este repositorio. El servicio de la app debe conservar su directorio actual.
 - Verificar en AdSense la CMP certificada de Google/TCF si se muestran anuncios a usuarios del EEE, Reino Unido o Suiza. El aviso de privacidad no reemplaza el consentimiento. El estado de esta configuración no es accesible desde el repositorio.
 - Configurar en AdSense las exclusiones de anuncios automáticos para Contacto, Privacidad, Términos, Quiénes somos y pantallas de la herramienta. Quitar el script de una página no sustituye esa configuración de cuenta.
 - Mantener las guías revisadas al cambiar los jueces. Incorporar demostraciones reales propias si están disponibles; no se publican videos ni credenciales ficticias para simular variedad.
