@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img" aria-labelledby="title desc">
+  <title id="title">Encuadre para analizar una serie</title>
+  <desc id="desc">Un teléfono sobre un apoyo estable apunta hacia una persona con el cuerpo completo dentro de un marco.</desc>
+  <rect width="720" height="240" rx="22" fill="#0f2018"/>
+  <path d="M70 202H650" stroke="#aab9b0" stroke-width="3"/>
+  <rect x="102" y="75" width="38" height="65" rx="7" fill="#13291f" stroke="#57f59b" stroke-width="3"/>
+  <circle cx="121" cy="86" r="3" fill="#57f59b"/>
+  <path d="M121 142V178M98 201l23-23 23 23" fill="none" stroke="#aab9b0" stroke-width="4"/>
+  <path d="M151 96L350 36M151 128l199 71" stroke="#57f59b" stroke-opacity=".55" stroke-dasharray="7 7" stroke-width="2"/>
+  <rect x="350" y="22" width="240" height="180" rx="10" fill="none" stroke="#57f59b" stroke-width="2"/>
+  <g fill="none" stroke="#f5f8f6" stroke-width="7" stroke-linecap="round">
+    <circle cx="470" cy="55" r="14"/>
+    <path d="M470 74v63m0-52l-40 29m40-29l40 29m-40 23l-27 53m27-53l27 53"/>
+  </g>
+  <g font-family="system-ui,sans-serif" font-size="15" fill="#c6d2cb" text-anchor="middle">
+    <text x="121" y="227">Apoyo estable</text>
+    <text x="470" y="227">Cuerpo completo visible</text>
+  </g>
+</svg>

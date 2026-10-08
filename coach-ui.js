@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.6.0';
+  const COACH_VERSION = '1.6.1';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -687,42 +687,8 @@
     return followPress(m,id,now,true);
   };
 
-  /* ---------------------------- ADS ---------------------------- */
-  const AD_CFG = Object.assign({
-    client: '',
-    home: '',
-    summary: '',
-    history: ''
-  }, window.CALICOACH_ADS || {});
-
-  function renderAd(container, slotKey) {
-    if (!container) return;
-    container.replaceChildren();
-    container.classList.add('coach-ad-shell');
-
-    const slot = AD_CFG[slotKey];
-    if (!AD_CFG.client || !slot) {
-      const p=document.createElement('div');
-      p.className='coach-ad-placeholder';
-      p.innerHTML='<small>Espacio reservado para anuncio</small><span>Se activa cuando agregues tus IDs de AdSense.</span>';
-      container.append(p);
-      return;
-    }
-
-    const ins=document.createElement('ins');
-    ins.className='adsbygoogle';
-    ins.style.display='block';
-    ins.setAttribute('data-ad-client', AD_CFG.client);
-    ins.setAttribute('data-ad-slot', slot);
-    ins.setAttribute('data-ad-format', 'auto');
-    ins.setAttribute('data-full-width-responsive', 'true');
-    container.append(ins);
-    try {
-      (window.adsbygoogle = window.adsbygoogle || []).push({});
-    } catch (e) {
-      console.warn('[Calicoach] AdSense todavía no está disponible.', e);
-    }
-  }
+  // La herramienta, sus resultados automáticos y el historial local no sirven anuncios.
+  // La monetización se administra en las páginas editoriales de website/.
 
   /* ---------------------- LAZY AI LIBRARIES ---------------------- */
   const AI_LIBS = [
@@ -864,6 +830,9 @@
   .cc-actions{display:grid;grid-template-columns:1fr;gap:10px;margin-top:14px}
   .cc-actions.two{grid-template-columns:1fr 1fr}
   .cc-note{font-size:12px;line-height:1.45;color:var(--cc-muted);margin:16px 2px}
+  .cc-site-links{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:20px}
+  .cc-site-links a{color:var(--cc-green);min-height:44px;display:inline-flex;align-items:center;text-decoration:underline;text-underline-offset:4px}
+  .cc-site-links a:focus-visible{outline:3px solid var(--cc-yellow);outline-offset:4px}
   .cc-livehud{
     position:absolute;z-index:12;left:0;right:0;top:0;bottom:0;pointer-events:none;
   }
@@ -990,12 +959,6 @@
   .cc-table th:first-child,.cc-table td:first-child{text-align:left}
   .cc-history-item{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border-bottom:1px solid var(--cc-line);padding:12px 0}
   .cc-history-item small{color:var(--cc-muted)}
-  .coach-ad-shell{margin:38px 0 10px;min-height:90px}
-  .coach-ad-placeholder{
-    min-height:90px;border:1px dashed #4c596b;border-radius:14px;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;color:#7f8b9b;text-align:center;padding:14px;gap:4px
-  }
-  .coach-ad-placeholder span{font-size:11px}
   .cc-hidden{display:none!important}
   @media (min-width:700px){
     .cc-actions{grid-template-columns:1fr 1fr}
@@ -1401,7 +1364,7 @@
   home.id='ccHome';
   home.innerHTML=`
     <div class="cc-shell">
-      <div class="cc-brand">Calicoach AI · ${COACH_VERSION}</div>
+      <div class="cc-brand">CaliReps AI · ${COACH_VERSION}</div>
       <h1 class="cc-title">Tu coach de calistenia con cámara</h1>
       <p class="cc-sub">Conteo, validación y feedback en tiempo real.</p>
       <div class="cc-card">
@@ -1414,7 +1377,12 @@
       </div>
       <button id="ccOpenHistory" class="cc-button ghost">Historial de series</button>
       <p class="cc-note">Las métricas biomecánicas son estimaciones 2D para entrenamiento. No sustituyen una evaluación médica o biomecánica profesional.</p>
-      <div id="ccAdHome"></div>
+      <nav class="cc-site-links" aria-label="Información de CaliReps AI">
+        <a href="website/about.html">Quiénes somos</a>
+        <a href="website/contact.html">Contacto</a>
+        <a href="website/privacy.html">Privacidad</a>
+        <a href="website/guides/">Guías</a>
+      </nav>
     </div>`;
   document.body.append(home);
 
@@ -1423,7 +1391,7 @@
     const x=document.createElement('option');x.value=o.value;x.textContent=o.textContent;homeSelect.append(x);
   });
   homeSelect.value=exerciseSelect.value;
-  renderAd($c('ccAdHome'),'home');
+  document.title='CaliReps AI | Coach de calistenia con cámara';
 
   function enterFreeMode(){
     const free=document.querySelector('input[name="workoutMode"][value="free"]');
@@ -1872,10 +1840,8 @@
           <button id="ccNewSeries" class="cc-button primary">${s.source==='clip'?'↺ Analizar de nuevo':'Nueva serie'}</button>
           <button id="ccSummaryHome" class="cc-button secondary">Inicio</button>
         </div>
-        <div id="ccAdSummary"></div>
       </div>`;
     summaryScreen.hidden=false;
-    renderAd($c('ccAdSummary'),'summary');
     $c('ccNewSeries').onclick=async()=>{
       summaryScreen.hidden=true;
       if(s.source==='clip'&&isClipMode()){
@@ -1908,15 +1874,13 @@
             </div>`).join(''):'<p>No hay series guardadas todavía.</p>'}
         </div>
         <button id="ccHistoryBack" class="cc-button secondary">Volver</button>
-        <div id="ccAdHistory"></div>
       </div>`;
     historyScreen.hidden=false;
     home.hidden=true;
-    renderAd($c('ccAdHistory'),'history');
     $c('ccHistoryBack').onclick=()=>{historyScreen.hidden=true;home.hidden=false};
   }
 
-  /* Sin ads dentro de #app: por diseño, la pantalla de análisis permanece limpia. */
+  /* La app completa permanece libre de anuncios. */
   console.info(`[Calicoach] UI ${COACH_VERSION} cargada. Core de jueceo conservado.`);
 })();
 
