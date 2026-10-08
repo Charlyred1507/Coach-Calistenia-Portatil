@@ -6,7 +6,7 @@ El correo de Google confirma que el sitio sigue en revisión; no es una notifica
 
 | Recomendación | Resultado en esta versión |
 | --- | --- |
-| Quiénes somos | Nueva página con propósito, mantenedor verificable, repositorio público y límites del MVP; resumen en portada. |
+| Quiénes somos | Nueva página con propósito del proyecto independiente y límites del MVP; resumen en portada. |
 | Contacto | Existía. Se amplía a soporte y consultas de privacidad, conservando el formulario publicado. No se inventan un correo ni tiempos de respuesta. |
 | Navegación | Enlaces a Quiénes somos y Contacto en todas las páginas; menú visible también en móvil; foco de teclado y enlace para saltar al contenido. |
 | Privacidad | Aviso actualizado sobre publicidad y cookies de Google, terceros, almacenamiento local, cámara y sincronización opcional. Se evita prometer controles de consentimiento que no se han configurado. |
@@ -17,7 +17,7 @@ El correo de Google confirma que el sitio sigue en revisión; no es una notifica
 
 ## Pendiente de publicación y cuenta
 
-- La captura de Cloudflare proporcionada por el mantenedor identifica `calireps-ai-website` como el proyecto de `calirepsai.com`, conectado a `Charlyred1507/CaliReps-AI-Website`. Este repositorio publica los archivos estáticos desde la raíz. El proyecto `coach-calistenia-portatil` y su repositorio se mantienen separados para `app.calirepsai.com`.
+- La captura de Cloudflare identifica `calireps-ai-website` como el proyecto de `calirepsai.com`, conectado al repositorio `CaliReps-AI-Website`. Ese repositorio publica los archivos estáticos desde la raíz. El proyecto `coach-calistenia-portatil` y su repositorio se mantienen separados para `app.calirepsai.com`.
 - Las mejoras se trasladaron a este repositorio conservando la estructura de publicación y los archivos originales `script.js`, `robots.txt` y `ads.txt`. La antigua ruta `/guides/contact.html` redirige al contacto vigente sin anuncios.
 - Antes del traslado se comprobaron las 20 páginas de contenido en tres anchuras de pantalla, los enlaces locales y el comportamiento de la app. La publicación debe verificarse en el dominio principal tras el despliegue automático.
 - Verificar en AdSense la CMP certificada de Google/TCF si se muestran anuncios a usuarios del EEE, Reino Unido o Suiza. El aviso de privacidad no reemplaza el consentimiento. El estado de esta configuración no es accesible desde el repositorio.
