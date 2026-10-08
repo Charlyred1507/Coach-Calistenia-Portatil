@@ -1378,10 +1378,10 @@
       <button id="ccOpenHistory" class="cc-button ghost">Historial de series</button>
       <p class="cc-note">Las métricas biomecánicas son estimaciones 2D para entrenamiento. No sustituyen una evaluación médica o biomecánica profesional.</p>
       <nav class="cc-site-links" aria-label="Información de CaliReps AI">
-        <a href="website/about.html">Quiénes somos</a>
-        <a href="website/contact.html">Contacto</a>
-        <a href="website/privacy.html">Privacidad</a>
-        <a href="website/guides/">Guías</a>
+        <a href="https://calirepsai.com/about.html">Quiénes somos</a>
+        <a href="https://calirepsai.com/contact.html">Contacto</a>
+        <a href="https://calirepsai.com/privacy.html">Privacidad</a>
+        <a href="https://calirepsai.com/guides/">Guías</a>
       </nav>
     </div>`;
   document.body.append(home);
