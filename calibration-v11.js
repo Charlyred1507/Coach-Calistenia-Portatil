@@ -10,6 +10,7 @@
     ? Number(video.currentTime.toFixed(2)) : null;
   const diagnostic={title:'Esperando movimiento',detail:'Inicia la serie. La aplicación mostrará qué criterio está pendiente.',level:'info'};
   let events=[];
+  let bestFrontMs=0;
   const report=(title,detail,level='info')=>{
     if(diagnostic.title!==title || diagnostic.detail!==detail){
       diagnostic.title=title;diagnostic.detail=detail;diagnostic.level=level;
@@ -69,6 +70,12 @@
     button.setAttribute('aria-label','Por qué no contó la repetición');
     button.onclick=()=>{renderDiagnostics();dialog.showModal();};
     top.insertBefore(button,$('ccGuide'));
+    const box=$('ccRepNum')?.closest('.cc-repbox');
+    if(box&&!$('ccWhyHoldProgress')){
+      const progress=document.createElement('span');progress.id='ccWhyHoldProgress';
+      progress.style.cssText='display:none;font:700 11px system-ui;color:#b0ffcc;margin-top:5px';
+      box.append(progress);
+    }
   }
   attachButton();
   new MutationObserver(attachButton).observe($('app'),{childList:true,subtree:false});
@@ -84,8 +91,10 @@
     oa={phase:'ready',side:null,anchor:null,homeCount:0,homeSince:null,
       started:0,start:0,startClearance:0,minAngle:180,maxClearance:-Infinity,
       minAt:null,maxAt:null,topCount:0,lastTop:0,lastCredit:-Infinity,lastSeen:null,length:0};
-    events=[];report('Esperando movimiento','Se reinició la calibración del ejercicio.');
+    events=[];bestFrontMs=0;report('Esperando movimiento','Se reinició la calibración del ejercicio.');
   }
+  const baseLockAthlete=lockAthlete;
+  lockAthlete=function(...args){resetCalibration();return baseLockAthlete(...args);};
   const oldResetJudge=resetJudge;
   resetJudge=function(){resetCalibration();return oldResetJudge();};
   exerciseSelect.addEventListener('change',resetCalibration);
@@ -342,7 +351,12 @@
         'actualmente '+((adv.holdMs||0)/1000).toFixed(1)+' / 5 s. '+
         (m?.fallback?'La línea hombro-rodilla-tobillo confirma la horizontalidad; cadera estimada con incertidumbre.':''));
     }
-    return baseFrontJudge(pose,now);
+    const result=baseFrontJudge(pose,now);
+    bestFrontMs=Math.max(bestFrontMs,adv.holdMs||0);
+    const hold=$('ccWhyHoldProgress');
+    if(hold){hold.style.display=exercise()==='frontlever'?'block':'none';
+      hold.textContent=(adv.holdValid?'Hold '+((adv.holdMs||0)/1000).toFixed(1):'Hold 0.0')+' / 5 s';}
+    return result;
   };
   const baseAdvanced=judgeAdvanced;
   judgeAdvanced=function(pose,now=judgeTime()){
@@ -350,6 +364,15 @@
     if(exercise()==='onearmpullup')return judgeOneArmV11(pose,now);
     return baseAdvanced(pose,now);
   };
+  video.addEventListener('ended',()=>{
+    if(exercise()==='frontlever' && bestFrontMs>=1000 && bestFrontMs<5000 && (Number(repNum.textContent)||0)===0){
+      report('Hold detectado, aún sin crédito',
+        'Se reconocieron '+(bestFrontMs/1000).toFixed(1)+' s de posición horizontal, pero se necesitan 5.0 s continuos para acreditar un bloque.','warn');
+    }
+  });
+  exerciseSelect.addEventListener('change',()=>{
+    const hold=$('ccWhyHoldProgress');if(hold)hold.style.display='none';
+  });
   const baseNoRep=noRep;
   noRep=function(reason){
     report('Repetición no acreditada',String(reason),'warn');
