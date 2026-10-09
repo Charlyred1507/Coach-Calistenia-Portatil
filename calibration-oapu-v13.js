@@ -71,7 +71,6 @@
       if(now-s.missAt>1000 && s.phase!=='credited')tracks[side]=fresh(side);
       return null;
     }
-    s.missAt=null;
     if(s.last!=null&&(now<s.last||now-s.last>1200)){tracks[side]=fresh(side);s=tracks[side];}
     s.last=now;
     const validGrip=m.handHigh && (!m.hip||m.hip.y>m.p.shoulder.y-m.arm*.10);
@@ -87,7 +86,12 @@
     if(s.anchor && (dist(m.p.wrist,s.anchor)>.78*m.arm ||
       Math.abs(m.p.wrist.y-s.anchor.y)>.68*m.arm)){
       if(s.missAt==null)s.missAt=now;
-      if(now-s.missAt>550)tracks[side]=fresh(side);
+      if(now-s.missAt>550){
+        // The wrist really left the reference grip; never recycle this
+        // segment into another rep.
+        tracks[side]=fresh(side);
+        if(now-lastCreditedAt<1500)tracks[side].blockedUntil=lastCreditedAt+900;
+      }
       return null; // Never use an outlier as evidence of ascent.
     }
     s.missAt=null;
@@ -104,6 +108,7 @@
       tracks[side]=fresh(side);return null;
     }
     if(s.phase==='seek'){
+      if(now<s.blockedUntil)return null;
       if(!armHang(m)){s.hangAt=null;return null;}
       if(!s.anchor){
         s.anchor={x:m.p.wrist.x,y:m.p.wrist.y};
