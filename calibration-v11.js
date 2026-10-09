@@ -88,13 +88,24 @@
     minAt:null,maxAt:null,topCount:0,lastTop:0,lastCredit:-Infinity,lastSeen:null,length:0};
   function resetCalibration(){
     hs={L:fresh(),R:fresh(),lastCredit:-Infinity};
-    oa={phase:'ready',side:null,anchor:null,homeCount:0,homeSince:null,
-      started:0,start:0,startClearance:0,minAngle:180,maxClearance:-Infinity,
-      minAt:null,maxAt:null,topCount:0,lastTop:0,lastCredit:-Infinity,lastSeen:null,length:0};
+    oa=oaFresh();
+    lastOneStatus='';lastOneStatusAt=-Infinity;
     events=[];bestFrontMs=0;report('Esperando movimiento','Se reinició la calibración del ejercicio.');
   }
   const baseLockAthlete=lockAthlete;
-  lockAthlete=function(...args){resetCalibration();return baseLockAthlete(...args);};
+  lockAthlete=function(...args){
+    // MoveNet cambia IDs durante una tracción con balanceo. Si es
+    // claramente el mismo agarre en menos de 900 ms, conservar la subida.
+    const tracked=args[0]?.pose;
+    const wrist=tracked&&oa.side?sidePoints(tracked,oa.side)?.wrist:null;
+    const t=judgeTime();
+    const continueSame=exercise()==='onearmpullup'&&oa.phase==='pull'&&
+      oa.lastSeen!=null&&t>=oa.lastSeen&&t-oa.lastSeen<=900&&
+      wrist&&wrist.score>=.16&&oa.anchor&&
+      distance(wrist,oa.anchor)<=Math.max(1,oa.length)*.50;
+    if(!continueSame)resetCalibration();
+    return baseLockAthlete(...args);
+  };
   const oldResetJudge=resetJudge;
   resetJudge=function(){resetCalibration();return oldResetJudge();};
   exerciseSelect.addEventListener('change',resetCalibration);
