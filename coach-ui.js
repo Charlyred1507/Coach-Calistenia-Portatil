@@ -1234,8 +1234,11 @@
       Number.isFinite(r.duration)&&r.duration>.06&&
       Number.isFinite(r.rom)&&r.rom>0);
     if(rs.length<2 || isHoldExercise())return null;
-    const early=rs.slice(0,Math.min(3,rs.length));
-    const recent=rs.slice(-Math.min(2,rs.length));
+    // Compare nonoverlapping beginning/end reps; with two reps, compare
+    // the first to the second rather than averaging both against themselves.
+    const comparisonN=Math.max(1,Math.floor(rs.length/2));
+    const early=rs.slice(0,Math.min(3,comparisonN));
+    const recent=rs.slice(-Math.min(2,comparisonN));
     const baseSpeed=median(early.map(r=>r.speed));
     const nowSpeed=median(recent.map(r=>r.speed));
     const baseTempo=median(early.map(r=>r.duration));
