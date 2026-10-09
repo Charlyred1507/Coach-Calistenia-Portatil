@@ -199,109 +199,191 @@
     else report('HSPU: criterio pendiente',waiting);
   }
 
-  /* One arm: el mismo agarre debe permanecer fijo en la barra.
-     Después de acreditar una rep no puede reaparecer una segunda por
-     levantar el brazo libre o dejar de colgarse. */
-  function oneMetrics(pose,side){
+  /* ONE ARM V11.1
+     Una sola trayectoria por brazo, con dos compuertas independientes:
+     1. suspensión estable y subida genuina del hombro/codo;
+     2. evidencia del rostro a altura de la barra, con margen 2D y memoria
+        breve si barra/cabello ocultan la nariz.
+     Después de aceptar se exige NUEVA suspensión estable antes de rearmar.
+     El brazo libre no es obligatorio para armar: se evalúa como advertencia.
+  */
+  const oaFresh=(lastCredit=-Infinity)=>({
+    phase:'ready',side:null,anchor:null,homeCount:0,homeSince:null,
+    started:null,start:0,startClearance:null,startShoulderY:null,
+    minAngle:180,maxClearance:-Infinity,minAt:null,maxAt:null,
+    topCount:0,lastTop:null,lastCredit,lastSeen:null,length:0,
+    maxShoulderRise:0,peakSeen:false,freeMayAssist:false,faceSeen:false,
+    lastFaceY:null,lastFaceAt:null,peakAt:null,returnedAt:null
+  });
+  oa=oaFresh();
+  function resetOneState(keepCredit=true){
+    oa=oaFresh(keepCredit?oa.lastCredit:-Infinity);
+  }
+  function oneFace(pose){
     const nose=point(pose,0);
-    if(!nose||nose.score<JUDGE_CONF)return null;
+    if(nose&&Number.isFinite(nose.y)&&(nose.score??0)>=.14)
+      return {y:nose.y,score:nose.score,approx:false};
+    // MoveNet puede perder la nariz cuando la barra la oculta. Se permite
+    // una referencia de ojos/orejas SOLO con suficiente hombro/codo visibles.
+    const face=(pose?.keypoints||[]).slice(1,5).filter(p=>
+      p&&Number.isFinite(p.y)&&(p.score??0)>=.15);
+    if(!face.length)return null;
+    return {y:face.reduce((v,p)=>v+p.y,0)/face.length,score:
+      Math.max(...face.map(p=>p.score)),approx:true};
+  }
+  function oneMetrics(pose,side){
     const p=sidePoints(pose,side),other=sidePoints(pose,side==='L'?'R':'L');
-    if(![p.shoulder,p.elbow,p.wrist].every(q=>q&&q.score>=.20))return null;
-    const up=distance(p.shoulder,p.elbow),lo=distance(p.elbow,p.wrist),length=up+lo;
-    if(Math.min(up,lo)<8||Math.min(up,lo)/Math.max(up,lo)<.25)return null;
+    if(![p.shoulder,p.elbow,p.wrist].every(q=>q&&
+        Number.isFinite(q.x)&&Number.isFinite(q.y)&&(q.score??0)>=.16))return null;
+    const upper=distance(p.shoulder,p.elbow),lower=distance(p.elbow,p.wrist),length=upper+lower;
+    if(Math.min(upper,lower)<8||Math.min(upper,lower)/Math.max(upper,lower)<.24)return null;
     const a=angle(p.shoulder,p.elbow,p.wrist);
     if(!Number.isFinite(a))return null;
-    const clearance=(p.wrist.y-nose.y)/lo;
-    const free=other.wrist&&other.wrist.score>=JUDGE_CONF;
+    const face=oneFace(pose);
+    const clearance=face?(p.wrist.y-face.y)/lower:null;
+    const free=other.wrist&&other.wrist.score>=.18;
     const separated=!!(free&&distance(other.wrist,p.wrist)>length*.30&&
       other.wrist.y>p.wrist.y+length*.18);
-    return {side,p,angle:a,length,clearance,separated,
-      home:a>=155&&p.wrist.y<p.shoulder.y-length*.25&&separated,
+    const freeNearGrip=!!(free&&distance(other.wrist,p.wrist)<length*.30 &&
+      other.wrist.y<p.shoulder.y);
+    return {side,p,angle:a,length,clearance,face,freeNearGrip,separated,
+      home:a>=155&&p.wrist.y<p.shoulder.y-length*.22,
       quality:Math.min(p.shoulder.score,p.elbow.score,p.wrist.score)};
   }
+  let lastOneStatus='',lastOneStatusAt=-Infinity;
+  function oneStatus(title,detail,level='info',now=judgeTime()){
+    report(title,detail,level);
+    // La capa coach antes dejaba el texto "Atleta fijado" aun a mitad de rep.
+    // Limitar actualizaciones para no tapar conteo ni saturar la pantalla.
+    if(now-lastOneStatusAt>650&&title!==lastOneStatus){
+      lastOneStatus=title;lastOneStatusAt=now;
+      setStatus(title==='Repetición acreditada'
+        ?'One arm pull-up válida · espera nueva extensión'
+        :detail,level);
+    }
+  }
   function judgeOneArmV11(pose,now){
-    if(oa.lastSeen!=null&&(now<oa.lastSeen||now-oa.lastSeen>1500)){
-      // No descartar el agarre conocido ante una desaparición breve.
-      const grip=oa.anchor;
+    if(oa.lastSeen!=null&&(now<oa.lastSeen||now-oa.lastSeen>1400)){
       resetOneState();
-      oa.anchor=grip;
     }
     const choices=['L','R'].map(s=>oneMetrics(pose,s)).filter(Boolean);
-    let m=oa.side?choices.find(v=>v.side===oa.side):choices.filter(v=>v.home)
-      .sort((a,b)=>b.quality-a.quality)[0];
-    if(!m){report('One arm: brazo no visible','Mantén visibles el brazo de agarre, nariz y mano libre. No se contabiliza una pose perdida.','warn');return;}
+    const m=oa.side?choices.find(x=>x.side===oa.side):
+      choices.filter(x=>x.home).sort((a,b)=>b.quality-a.quality)[0];
+    if(!m){
+      oneStatus('Brazo poco visible','Muestra el brazo de apoyo completo. La nariz puede ocultarse brevemente sin anular una subida.', 'warn',now);
+      return;
+    }
     oa.lastSeen=now;
-    const nearGrip=!oa.anchor||distance(m.p.wrist,oa.anchor)<=m.length*.34;
-    if(!nearGrip){
-      report('Agarre no confirmado','La muñeca se alejó de la posición de la barra. No inicia otra rep por levantar el brazo libre.','warn');
+    const drift=oa.anchor?distance(m.p.wrist,oa.anchor)/Math.max(1,oa.length):0;
+    // Brazo extendido y muñeca estable: es el mismo agarre, no otra rep.
+    if(oa.anchor&&drift>.64){
       if(oa.phase!=='credited')resetOneState();
+      oneStatus('Agarre perdido','La muñeca cambió de posición (>64% del largo del brazo). No se contará una rep fantasma.','warn',now);
       return;
     }
     if(oa.phase==='ready'){
       if(!m.home){
-        report('Esperando suspensión','Extiende el brazo de agarre ≥155° y mantén la otra mano libre.');
+        oa.homeCount=0;
+        oneStatus('Esperando extensión','Extiende el brazo de agarre ≥155° y mantén la muñeca arriba del hombro.','info',now);
         return;
       }
       if(!oa.side)oa.side=m.side;
       oa.homeCount++;
       if(oa.homeCount<2){
-        report('Calibrando agarre','Confirma la suspensión con el brazo extendido.');
+        oneStatus('Calibrando agarre','Mantén un momento el brazo extendido para identificar la muñeca de apoyo.','info',now);
         return;
       }
       oa.anchor={x:m.p.wrist.x,y:m.p.wrist.y};
       oa.length=m.length;oa.start=m.angle;oa.startClearance=m.clearance;
-      oa.minAngle=m.angle;oa.maxClearance=m.clearance;
-      oa.phase='armed';oa.started=0;oa.homeCount=0;
-      report('Lista para subir','Agarre y extensión confirmados. Sube sin ayudar con la mano libre.');
+      oa.startShoulderY=m.p.shoulder.y;oa.minAngle=m.angle;
+      oa.maxClearance=Number.isFinite(m.clearance)?m.clearance:-Infinity;
+      oa.phase='armed';oa.started=null;oa.homeCount=0;
+      oneStatus('Lista para subir','Extensión detectada. Inicia la subida con el mismo brazo.','info',now);
       return;
     }
     if(oa.phase==='credited'){
-      const rest=m.home&&m.clearance<=oa.startClearance+.15;
+      // Re-armar únicamente si el cuerpo regresa abajo y el brazo se
+      // mantiene extendido al menos 350 ms. Nunca reusar la subida anterior.
+      const low=oa.startClearance==null||m.clearance==null||
+        m.clearance<=oa.startClearance+.27;
+      const shoulderLow=oa.startShoulderY==null||
+        m.p.shoulder.y>=oa.startShoulderY-oa.length*.17;
+      const rest=m.home&&low&&shoulderLow;
       if(rest){
         if(oa.homeSince==null)oa.homeSince=now;
-        if(now-oa.homeSince>=280 && now-oa.lastCredit>=500){
-          oa.phase='ready';oa.homeCount=0;oa.side=m.side;
+        if(now-oa.homeSince>=350&&now-oa.lastCredit>=600){
+          const credit=oa.lastCredit;
+          resetOneState();oa.side=m.side;oa.lastCredit=credit;
+          oneStatus('Nueva rep disponible','Extensión de regreso confirmada. Puedes iniciar un nuevo ascenso.','info',now);
+          return;
         }
       }else oa.homeSince=null;
-      report('Rep terminada','Debe haber una nueva suspensión estable y un nuevo ascenso para contar otra rep.');
+      oneStatus('Rep terminada','Ya se contó esta subida. El brazo debe volver a extensión estable antes de otra.','info',now);
       return;
     }
     if(oa.phase==='armed'){
-      if(m.angle>143)return;
-      oa.phase='pull';oa.started=now;oa.minAngle=m.angle;oa.maxClearance=m.clearance;
-      oa.minAt=now;oa.maxAt=now;oa.topCount=0;
+      if(m.angle>143) {
+        if(m.home){oa.start=m.angle;oa.startShoulderY=m.p.shoulder.y;
+          if(m.clearance!=null)oa.startClearance=m.clearance;}
+        return;
+      }
+      oa.phase='pull';oa.started=now;oa.minAngle=m.angle;
+      oa.maxClearance=Number.isFinite(m.clearance)?m.clearance:-Infinity;
+      oa.minAt=now;oa.maxAt=Number.isFinite(m.clearance)?now:null;
+      oa.topCount=0;oa.maxShoulderRise=0;oa.peakSeen=false;
+      oa.freeMayAssist=false;
     }
     if(oa.phase!=='pull')return;
-    if(now-oa.started>8500){resetOneState();return;}
+    if(now-oa.started>9000){resetOneState();return;}
     if(m.angle<oa.minAngle){oa.minAngle=m.angle;oa.minAt=now;}
-    if(m.clearance>oa.maxClearance){oa.maxClearance=m.clearance;oa.maxAt=now;}
-    const peakClose=Math.abs((oa.minAt??now)-(oa.maxAt??now))<=500;
-    const reached=oa.minAngle<=125 && oa.start-oa.minAngle>=40 &&
-      oa.maxClearance>=-.05 && oa.maxClearance-oa.startClearance>=.30 && peakClose;
-    if(reached && m.angle<=132 && m.clearance>=-.13){
-      oa.topCount=oa.lastTop!=null&&now-oa.lastTop<=420?oa.topCount+1:1;oa.lastTop=now;
+    if(Number.isFinite(m.clearance)&&m.clearance>oa.maxClearance){
+      oa.maxClearance=m.clearance;oa.maxAt=now;
     }
-    if(oa.topCount>=2 && now-oa.started>=180){
+    if(m.freeNearGrip)oa.freeMayAssist=true;
+    oa.maxShoulderRise=Math.max(oa.maxShoulderRise,
+      (oa.startShoulderY-m.p.shoulder.y)/Math.max(1,oa.length));
+    const excursion=oa.start-oa.minAngle;
+    const nearFace=oa.maxClearance>=-.38;
+    const climbed=oa.maxShoulderRise>=.16;
+    const faceDelta=oa.startClearance==null||
+      oa.maxClearance-oa.startClearance>=.35;
+    const peakClose=oa.maxAt==null||Math.abs(oa.minAt-oa.maxAt)<=900;
+    const reached=oa.minAngle<=125&&excursion>=40&&nearFace&&
+      climbed&&faceDelta&&peakClose&&!oa.freeMayAssist;
+    // Memoria de pico: una nariz oculta por la barra un único frame
+    // no debe invalidar la evidencia acumulada.
+    if(reached)oa.peakSeen=true;
+    if(reached&&m.angle<=140){
+      oa.topCount=oa.lastTop!=null&&now-oa.lastTop<=650?oa.topCount+1:1;
+      oa.lastTop=now;
+    }
+    const verifiedPeak=oa.topCount>=2 ||
+      (oa.peakSeen&&m.home&&now-oa.started>=420);
+    if(verifiedPeak&&now-oa.started>=250&&
+       now-oa.lastCredit>=800){
       oa.phase='credited';oa.lastCredit=now;oa.homeSince=null;
-      report('Repetición acreditada','Se confirmó subida real con el mismo agarre y flexión de codo ≤125°.','ok');
+      oneStatus('Repetición acreditada','Ascenso confirmado: flexión ≤125°, hombro subió y cabeza cerca de la barra.','ok',now);
       candidateAdvanced(1);
       return;
     }
-    if(m.home&&now-oa.started>250){
-      report('Subida incompleta','Se regresó a extensión sin altura suficiente de cabeza o flexión ≤125°.','warn');
-      oa.phase='armed';oa.started=0;oa.minAngle=m.angle;
-      oa.maxClearance=m.clearance;oa.start=m.angle;oa.startClearance=m.clearance;
+    if(m.home&&now-oa.started>450){
+      oneStatus('Intento sin altura suficiente',
+        'Se regresó a extensión. Codo mínimo '+fmt(oa.minAngle)+
+        ', subida del hombro '+Math.round(oa.maxShoulderRise*100)+
+        '% (mín. 16%), cara/barra '+(Number.isFinite(oa.maxClearance)
+          ?Math.round(oa.maxClearance*100)+'%':'sin lectura')+'.','warn',now);
+      oa.phase='armed';oa.started=null;oa.minAngle=m.angle;
+      oa.maxClearance=Number.isFinite(m.clearance)?m.clearance:-Infinity;
+      oa.start=m.angle;oa.startClearance=m.clearance;
+      oa.startShoulderY=m.p.shoulder.y;
+      oa.topCount=0;oa.peakSeen=false;oa.freeMayAssist=false;
       return;
     }
-    report('One arm: en ascenso',
-      'Codo mínimo '+fmt(oa.minAngle)+' (meta ≤125°), altura cabeza-muñeca '+
-      Math.round(oa.maxClearance*100)+'% (meta ≥-5%), mano de apoyo sin desplazarse.');
-  }
-  function resetOneState(){
-    const grip=oa.anchor,lastCredit=oa.lastCredit;
-    oa={phase:'ready',side:null,anchor:grip,homeCount:0,homeSince:null,
-      started:0,start:0,startClearance:0,minAngle:180,maxClearance:-Infinity,
-      minAt:null,maxAt:null,topCount:0,lastTop:0,lastCredit,lastSeen:null,length:0};
+    oneStatus('One arm: subiendo',
+      'Codo mínimo '+fmt(oa.minAngle)+' (≤125°), hombro subió '+
+      Math.round(oa.maxShoulderRise*100)+'% (mín. 16%), cabeza/barra '+
+      (Number.isFinite(oa.maxClearance)?Math.round(oa.maxClearance*100)+'% (mín. −38%)':'seguimiento parcial')+
+      (oa.freeMayAssist?'. Mano libre cerca de barra: revisar asistencia.':''),'info',now);
   }
 
   /* Front lever: la ropa puede ocultar la cadera. Nunca sustituir
