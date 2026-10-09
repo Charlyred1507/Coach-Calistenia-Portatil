@@ -38,7 +38,8 @@
     stableStart:null,returnStart:null,startAngle:null,startShoulderY:null,
     startFaceGap:null,minAngle:180,maxFaceGap:-Infinity,
     maxShoulderRise:0,peakAt:null,startedAt:null,topSamples:0,
-    lastCredit:previousCredit,freeNear:false,minimumGripDrift:0
+    lastCredit:previousCredit,freeNear:false,minimumGripDrift:0,
+    gripLostAt:null,gripOutliers:0,peakConfirmedAt:null,otherNearSamples:0
   });
   o=freshArm();
   function oapuParts(pose,side){
@@ -86,18 +87,34 @@
     o.lastAt=now;
     // Genuine bar grip must stay spatially fixed while the torso moves.
     const drift=o.hand?distance(m.p.wrist,o.hand)/m.length:0;
-    if(o.hand && (drift>.28 ||
-       Math.abs(m.p.wrist.y-o.hand.y)>m.length*.23 ||
-       !m.handAbove||m.inverted)){
-      const credit=o.lastCredit;
-      o=freshArm(true,credit);
-      info('Agarre perdido','La mano se alejó de la barra o bajó respecto del hombro. Movimiento posterior bloqueado.','warn',now);
+    // One noisy MoveNet wrist keypoint cannot cancel a real ascent.
+    // While climbing, preserve the trajectory for a short gap, but do not
+    // consume invalid geometry as movement evidence.
+    const gripOutlier=!!(o.hand && (
+      drift>.60 || Math.abs(m.p.wrist.y-o.hand.y)>m.length*.55 ||
+      (!m.handAbove && o.phase!=='credited') || m.inverted
+    ));
+    if(gripOutlier){
+      if(o.gripLostAt==null)o.gripLostAt=now;
+      o.gripOutliers++;
+      const lostFor=now-o.gripLostAt;
+      if(lostFor>=750 && o.gripOutliers>=3){
+        const credit=o.lastCredit;
+        o=freshArm(true,credit);
+        info('Agarre perdido','Se perdió el agarre durante más de 0.75 s. Se bloqueó un nuevo conteo.', 'warn',now);
+      }else{
+        info('Muñeca parcialmente visible','MoveNet perdió momentáneamente la muñeca; mantengo la trayectoria sin regalar recorrido.','info',now);
+      }
       return;
     }
+    o.gripLostAt=null;o.gripOutliers=0;
     if(m.otherAtGrip){
-      o.freeNear=true;
-      info('Posible asistencia','La mano libre se acerca al agarre: no se acredita como one arm sin revisión.','warn',now);
-    }
+      o.otherNearSamples++;
+      // Camera-based proximity does not prove actual assistance.
+      // Preserve a human-review hint without rejecting the only real rep.
+      if(o.otherNearSamples>=3)
+        info('Revisar mano libre','La mano libre parece cercana al agarre. El juez puede revisarla; no se anula por proximidad 2D.','warn',now);
+    }else o.otherNearSamples=0;
     // After dismount cannot rearm by simply raising an arm in free space.
     // Require a fresh, stationary overhead hang for >=700ms.
     if(o.phase==='dismounted'){
@@ -117,7 +134,7 @@
       return;
     }
     if(o.phase==='credited'){
-      if(!m.handAbove || drift>.16){
+      if(!m.handAbove || drift>.60){
         o=freshArm(true,o.lastCredit);
         info('Fin de la serie','Se detectó que soltaste la barra. No se puede crear una rep extra.','warn',now);
         return;
@@ -167,24 +184,38 @@
     if(m.angle<o.minAngle){o.minAngle=m.angle;o.peakAt=now;}
     if(Number.isFinite(m.faceGap))o.maxFaceGap=Math.max(o.maxFaceGap,m.faceGap);
     if(m.otherAtGrip)o.freeNear=true;
+    // Strong geometry must coexist within the SAME pull.
+    // The face may be occluded briefly by the bar; shoulder elevation and
+    // elbow excursion then supply an independent check.
+    const faceVisible=Number.isFinite(o.maxFaceGap);
+    const faceClimb=faceVisible&&o.maxFaceGap>=-.56&&
+      (o.startFaceGap==null||o.maxFaceGap-o.startFaceGap>=.24);
+    const bodyClimb=o.maxShoulderRise>=.10 ||
+      (faceVisible&&o.startFaceGap!=null&&o.maxFaceGap-o.startFaceGap>=.48);
     const actualClimb=o.minAngle<=125 &&
-      o.startAngle-o.minAngle>=40 && o.maxShoulderRise>=.15 &&
-      o.maxFaceGap>=-.38 &&
-      (o.startFaceGap==null||o.maxFaceGap-o.startFaceGap>=.30);
+      o.startAngle-o.minAngle>=40 && bodyClimb &&
+      (faceClimb || (o.minAngle<=112&&o.maxShoulderRise>=.24));
     const supported=o.hand&&m.handAbove&&
-      Math.abs(m.p.wrist.y-o.hand.y)<=m.length*.23&&
-      distance(m.p.wrist,o.hand)<=m.length*.28;
-    if(actualClimb && supported && !o.freeNear && m.angle<=140){
+      Math.abs(m.p.wrist.y-o.hand.y)<=m.length*.55&&
+      distance(m.p.wrist,o.hand)<=m.length*.60;
+    if(actualClimb && supported && m.angle<=142){
       o.topSamples++;
+      o.peakConfirmedAt=now;
     }
-    if(o.topSamples>=2 && now-o.startedAt>=210 &&
+    // If the one clear peak lasts only a frame, use the return phase as
+    // a second temporal confirmation rather than forcing two peak frames.
+    const peakInMemory=o.peakConfirmedAt!=null &&
+      now-o.peakConfirmedAt<=850 &&
+      m.angle>=o.minAngle+14 &&
+      o.maxShoulderRise>=.10;
+    if((o.topSamples>=2 || peakInMemory) && now-o.startedAt>=210 &&
        now-o.lastCredit>=1000){
       o.phase='credited';o.lastCredit=now;o.returnStart=null;
       info('Rep válida','Subida unilateral detectada con agarre fijo; espera el regreso antes de contar otra.','ok',now);
       candidateAdvanced(1);
       return;
     }
-    if(m.angle>=155&&now-o.startedAt>=420){
+    if(m.angle>=155&&now-o.startedAt>=700&&!o.peakConfirmedAt){
       o=freshArm(true,o.lastCredit);
       info('Sin altura suficiente','Se regresó a extensión antes de confirmar la parte alta; prepara otro agarre.','warn',now);
       return;
