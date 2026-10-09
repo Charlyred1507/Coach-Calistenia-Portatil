@@ -368,6 +368,19 @@
   video.addEventListener('seeking',()=>{
     o=freshArm();resetPistol();
   });
+  // Make the actual video-mode exercise unmistakable: the uploaded
+  // pistol reference had One arm pull-up selected throughout.
+  const highlight=document.createElement('style');
+  highlight.textContent='body.cc-clip-mode #ccLiveExercise{border-color:#46f59a!important;outline:2px solid rgba(70,245,154,.65);outline-offset:1px}';
+  document.head.append(highlight);
+  video.addEventListener('loadedmetadata',()=>{
+    if(typeof inputMode==='undefined'||inputMode!=='clip')return;
+    const chosen=exerciseSelect.selectedOptions?.[0]?.textContent ||
+      EXERCISES?.[exerciseSelect.value]?.name || exerciseSelect.value;
+    const live=$('ccLiveExercise');
+    if(live)live.title='Ejercicio evaluado: '+chosen;
+    setStatus('Video cargado: analizando '+chosen+'. Verifica que sea el ejercicio correcto.','info');
+  });
   ADVANCED.onearmpullup.guide=
     'Muestra barra, muñeca fija y hombro de apoyo. Después de cada subida debe confirmarse una extensión de regreso antes de otra rep. Al soltar la barra, el conteo se bloquea hasta detectar una nueva suspensión.';
   ADVANCED.pistolsquat.guide=
