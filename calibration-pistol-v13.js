@@ -11,7 +11,7 @@
   const C={minConf:.11,baselineKnee:140,downKnee:138,departAngle:17,
     topKnee:139,deepKnee:113,deepPerspectiveKnee:125,
     minROM:38,minDrop:.48,freeLift:.10,freeForward:.65,
-    maxGap:1550,occlusionGrace:1350,ankleMemory:550,peakWindow:1350};
+    maxGap:1550,occlusionGrace:1350,ankleMemory:950,peakWindow:1350};
   let stand={L:null,R:null},attempt=null,lastMsg='',lastMsgAt=-Infinity,
     ankleMemory={L:null,R:null};
   const reset=()=>{stand={L:null,R:null};attempt=null;
