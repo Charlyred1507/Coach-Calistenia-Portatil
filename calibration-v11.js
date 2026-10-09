@@ -73,7 +73,7 @@
   attachButton();
   new MutationObserver(attachButton).observe($('app'),{childList:true,subtree:false});
   const fmt=v=>Number.isFinite(v)?Math.round(v)+'°':'sin dato';
-  const fresh=()=>({phase:'ready',started:0,topCount:0,lastTop:0,min:Infinity,minReach:Infinity,
+  const fresh=()=>({phase:'ready',started:0,topCount:0,lastTop:null,min:Infinity,minReach:Infinity,
     start:0,startReach:0,armLength:0,shoulderY:0,maxShoulderDrop:0,bottom:false,previousAt:0,everMoved:false});
   let hs={L:fresh(),R:fresh(),lastCredit:-Infinity};
   let oa={phase:'ready',side:null,anchor:null,homeCount:0,homeSince:null,
@@ -132,9 +132,9 @@
       const top=m.elbow>=HSPU_RULES.home;
       if(st.phase==='ready'){
         if(top){
-          st.topCount=st.lastTop&&now-st.lastTop<=520?st.topCount+1:1;
+          st.topCount=st.lastTop!=null&&now-st.lastTop<=520?st.topCount+1:1;
           st.lastTop=now;
-        }else if(st.lastTop&&now-st.lastTop>520)st.topCount=0;
+        }else if(st.lastTop!=null&&now-st.lastTop>520)st.topCount=0;
         if(st.topCount>=2){
           st.phase='down';st.start=m.elbow;st.startReach=m.reach;
           st.armLength=m.length;st.shoulderY=m.p.shoulder.y;
@@ -158,10 +158,10 @@
       const travel=Math.max(reachTravel,st.maxShoulderDrop);
       if(st.phase==='down' && st.min<=HSPU_RULES.away &&
           rom>=HSPU_RULES.minExcursion && travel>=HSPU_RULES.minShoulderTravel){
-        st.phase='up';st.bottom=true;st.topCount=0;st.lastTop=0;
+        st.phase='up';st.bottom=true;st.topCount=0;st.lastTop=null;
       }
       if(st.phase==='up'&&top){
-        st.topCount=st.lastTop&&now-st.lastTop<=520?st.topCount+1:1;
+        st.topCount=st.lastTop!=null&&now-st.lastTop<=520?st.topCount+1:1;
         st.lastTop=now;
         if(st.topCount>=2 && now-st.started>=180 && now-hs.lastCredit>=550){
           hs.lastCredit=now;
@@ -270,7 +270,7 @@
     const reached=oa.minAngle<=125 && oa.start-oa.minAngle>=40 &&
       oa.maxClearance>=-.05 && oa.maxClearance-oa.startClearance>=.30 && peakClose;
     if(reached && m.angle<=132 && m.clearance>=-.13){
-      oa.topCount=oa.lastTop&&now-oa.lastTop<=420?oa.topCount+1:1;oa.lastTop=now;
+      oa.topCount=oa.lastTop!=null&&now-oa.lastTop<=420?oa.topCount+1:1;oa.lastTop=now;
     }
     if(oa.topCount>=2 && now-oa.started>=180){
       oa.phase='credited';oa.lastCredit=now;oa.homeSince=null;
