@@ -1,4 +1,4 @@
-/* CaliReps AI — pistol squat v13.4
+/* CaliReps AI — pistol squat v13.5
  * Separate, self-contained pistol FSM; leaves all other exercise judges alone.
  * Calibration reference 45363.mp4: first repetition cropped, 3 complete.
  * Uses 512px MoveNet multipose for uploaded clips and 384px for live camera.
@@ -139,9 +139,11 @@
        Math.abs(freeKnee.x-ankle.x)/scale>=1.0 &&
        freeKnee.y<ankle.y-scale*.18);
     const drop=(hip.y-b.hipY)/scale;
-    const hipNearFoot=(b.y-hip.y)/scale<=1.15;
+    const hipNearFoot=(b.y-hip.y)/scale<=1.25;
     return{drop,footFree,hipNearFoot,hip,ankle,
-      low:footFree&&drop>=.95&&hipNearFoot};
+      // Hip descent is measurable even while MoveNet assigns an
+      // artificially straight angle to the supporting knee.
+      low:footFree&&drop>=.74&&hipNearFoot};
   }
   function selectPartialStart(pose,now){
     const possible=[];
@@ -172,8 +174,14 @@
         m.kneeAngle<=C.downKnee&&drop>=.11;
       const fastDeparture=bending>=25&&m.kneeAngle<=125 &&
         drop>=.26&&free;
+      // Observed in 45369.mp4: third rep reaches ~91% normalized hip
+      // descent but MoveNet estimates only 16° of knee excursion.
+      // Use a distinct high-evidence hip-led entry, NOT looser defaults.
+      const hipLedDeparture=free&&b.samples>=2&&
+        bending>=6&&drop>=.52&&m.depth>=-.34&&
+        (b.y-m.hip.y)/Math.max(10,b.scale)<=1.40;
       const start=!m.inferredAnkle&&hasBaseline&&
-        (confidentDeparture||fastDeparture)&&
+        (confidentDeparture||fastDeparture||hipLedDeparture)&&
         ankleDrift<(age>C.baselineFreshAge?.98:1.10) &&
         (age<C.baselineFreshAge||free);
       if(start)possible.push({m,b,drop,bending,
@@ -316,7 +324,10 @@
         m.hip.y<=a.baseline.hipY+Math.max(10,m.scale*.18);
       if((now-a.topAt>=125||returnedKnee&&a.samples>=7||
           clearLockout&&a.samples>=5)&&now-a.started>=300){
-        const recoveredROM=a.partialBottom&&a.maxDrop>=.95&&
+        // Loss of knee keypoints means angular ROM cannot be measured.
+      // This fallback needs actual static-foot / free-leg / large hip-drop
+      // evidence across >=2 low frames, then a visible upright return.
+      const recoveredROM=a.partialBottom&&a.maxDrop>=.74&&
           a.baseline.angle>=140;
         const ok=a.unilateral&&a.freeSeen&&
           (fullRom||recoveredROM)&&a.trustedBottom;
@@ -386,5 +397,5 @@
     return model;
   };
   ADVANCED.pistolsquat.guide='Vista lateral con cuerpo y pies completos. Parte desde arriba; baja en una pierna con el pie libre elevado o extendido al frente y vuelve arriba. Se permiten microcortes de cadera/rodilla. La primera rep cortada no cuenta.';
-  console.info('[CaliReps AI] Pistol squat v13.4: grounded start, knee-occlusion recovery.');
+  console.info('[CaliReps AI] Pistol squat v13.5: hip-led start for false knee geometry and strict full-cycle validation.');
 })();
