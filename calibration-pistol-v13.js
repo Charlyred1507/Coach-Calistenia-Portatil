@@ -238,7 +238,7 @@
     }
     const m=candidates.find(c=>c.side===a.side);
     const body=partialSupport(pose,a.side,now);
-    if(body&&body.footFree)a.unilateral=true;
+    if(body&&body.footFree){a.unilateral=true;a.freeSeen=true;}
     if(body?.low){
       if(a.partialLowAt==null)a.partialLowAt=now;
       a.partialLowFrames++;
