@@ -14,9 +14,11 @@
     maxGap:1550,occlusionGrace:1350,ankleMemory:950,peakWindow:1350,
     baselineLongAge:12000,baselineFreshAge:4200};
   let stand={L:null,R:null},attempt=null,lastMsg='',lastMsgAt=-Infinity,
+    lastPistolCredit=-Infinity,
     ankleMemory={L:null,R:null};
   const reset=()=>{stand={L:null,R:null};attempt=null;
-    ankleMemory={L:null,R:null};lastMsg='';lastMsgAt=-Infinity};
+    ankleMemory={L:null,R:null};lastMsg='';lastMsgAt=-Infinity;
+    lastPistolCredit=-Infinity};
   const raw=(pose,i)=>v10RawPoint(pose,i,C.minConf);
   const fmt=v=>Number.isFinite(v)?Math.round(v)+'°':'sin lectura';
   const leg=(pose,side,now)=>{
@@ -58,7 +60,9 @@
     if(msg)msg.textContent=detail;
     if(lastMsg!==title&&now-lastMsgAt>380){
       lastMsg=title;lastMsgAt=now;
-      if(level!=='info'||title==='Pistol válida')setStatus(detail,level);
+      if(level!=='info'||title==='Pistol válida'||
+         (title==='Pistol: esperando subida inicial'&&now-lastPistolCredit>900))
+        setStatus(detail,level);
       const hist=$('ccWhyHistory');
       if(hist){
         const li=document.createElement('li');
@@ -144,9 +148,14 @@
           markVisible();updateMetrics(m.conf,m.kneeAngle,m.freeLift==null?null:m.freeLift*100,'Pierna libre','%');
           const possible=candidates.find(c=>stand[c.side]&&
             now-stand[c.side].last<=C.baselineLongAge);
+          const seen=possible&&stand[possible.side];
+          const angleDrop=seen?Math.round(seen.angle-possible.kneeAngle):0;
+          const hipDrop=seen?((possible.hip.y-seen.hipY)/Math.max(10,seen.scale)):0;
           feedback('Pistol: esperando subida inicial',
             possible
-            ?'Posición alta reconocida. Para iniciar, dobla y baja la pierna de apoyo con el otro pie libre; evita que quede oculta junto al poste.'
+            ?'Apoyo '+(possible.side==='L'?'izquierdo':'derecho')+
+              ' · flexión '+angleDrop+'° (meta ≥17°), descenso '+
+              Math.round(hipDrop*100)+'% (meta ≥11%). Mantén el pie de apoyo fijo.'
             :'Párate por completo antes de bajar. La primera rep cortada no cuenta; no hace falta elevar antes la pierna libre.',
             'info',now);
         }
@@ -242,6 +251,7 @@
         attempt=null;
         for(const c of candidates)captureBaseline(c,now);
         if(ok){
+          lastPistolCredit=now;
           validRep();
           feedback('Pistol válida',
             'Profundidad y regreso a extensión en pierna '+limb+
