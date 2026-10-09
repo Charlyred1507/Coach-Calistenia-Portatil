@@ -1,4 +1,4 @@
-/* CaliReps AI — pistol squat v13.2
+/* CaliReps AI — pistol squat v13.3
  * Separate, self-contained pistol FSM; leaves all other exercise judges alone.
  * Calibration reference 45363.mp4: first repetition cropped, 3 complete.
  * Uses 512px MoveNet multipose for uploaded clips and 384px for live camera.
@@ -11,7 +11,8 @@
   const C={minConf:.11,baselineKnee:140,downKnee:138,departAngle:17,
     topKnee:139,deepKnee:113,deepPerspectiveKnee:125,
     minROM:38,minDrop:.48,freeLift:.10,freeForward:.65,
-    maxGap:1550,occlusionGrace:1350,ankleMemory:950,peakWindow:1350};
+    maxGap:1550,occlusionGrace:1350,ankleMemory:950,peakWindow:1350,
+    baselineLongAge:12000,baselineFreshAge:4200};
   let stand={L:null,R:null},attempt=null,lastMsg='',lastMsgAt=-Infinity,
     ankleMemory={L:null,R:null};
   const reset=()=>{stand={L:null,R:null};attempt=null;
@@ -42,7 +43,9 @@
     const freeLift=fAnkle?(ankle.y-fAnkle.y)/scale:null;
     const freeForward=fAnkle?Math.abs(fAnkle.x-ankle.x)/scale:null;
     const depth=(hip.y-knee.y)/thigh;
-    const standing=kneeAngle>=C.baselineKnee && depth<=-.15;
+    // On the last rep the athlete does not pause fully upright; do not
+    // discard a usable support-leg baseline at 136–139°.
+    const standing=kneeAngle>=136&&depth<=-.15;
     return {side,hip,knee,ankle,fAnkle,fKnee,thigh,shin,scale,kneeAngle,
       depth,freeLift,freeForward,standing,
       inferredAnkle:!seenAnkle,
@@ -68,7 +71,7 @@
   function captureBaseline(m,t){
     if(!m.standing||m.inferredAnkle)return;
     let b=stand[m.side];
-    if(!b||t-b.last>2200||distance(m.ankle,b)>m.scale*.95){
+    if(!b||t-b.last>C.baselineLongAge||distance(m.ankle,b)>m.scale*.95){
       // Recalibrate immediately after a switch of supporting foot.
       b={samples:0,at:t,x:m.ankle.x,y:m.ankle.y,
         hipY:m.hip.y,angle:m.kneeAngle,scale:m.scale,last:t};
@@ -102,14 +105,27 @@
     const possible=[];
     for(const m of candidates){
       const b=stand[m.side];
-      if(!b||b.samples<2||now-b.last>3000)continue;
+      if(!b||b.samples<1||now-b.last>C.baselineLongAge)continue;
+      const age=now-b.last;
       const drop=(m.hip.y-b.hipY)/Math.max(10,b.scale);
       const bending=b.angle-m.kneeAngle;
       const ankleDrift=distance(m.ankle,b)/Math.max(10,b.scale);
-      const start=!m.inferredAnkle &&
-        bending>=C.departAngle && m.kneeAngle<=C.downKnee &&
-        drop>=.11 && ankleDrift<.85;
-      if(start)possible.push({m,b,drop,bending,score:bending*.6+drop*35+(unilateral(m)?10:0)});
+      const free=unilateral(m);
+      // For a recent single standing sample, require clear unilateral
+      // evidence before departure; for a known support leg, an old but
+      // spatially stable baseline can bridge a missed upright frame.
+      const hasBaseline=b.samples>=2||age<=C.baselineFreshAge&&free;
+      const confidentDeparture=bending>=C.departAngle &&
+        m.kneeAngle<=C.downKnee&&drop>=.11;
+      const fastDeparture=bending>=25&&m.kneeAngle<=125 &&
+        drop>=.26&&free;
+      const start=!m.inferredAnkle&&hasBaseline&&
+        (confidentDeparture||fastDeparture)&&
+        ankleDrift<(age>C.baselineFreshAge?.98:1.10) &&
+        (age<C.baselineFreshAge||free);
+      if(start)possible.push({m,b,drop,bending,
+        score:bending*.62+drop*30+(free?16:0)+
+          (m.fAnkle?3:0)-ankleDrift*18-(age>C.baselineFreshAge?4:0)});
     }
     return possible.sort((a,b)=>b.score-a.score)[0]||null;
   }
@@ -126,8 +142,12 @@
         }else{
           const m=candidates.slice().sort((a,b)=>b.conf-a.conf)[0];
           markVisible();updateMetrics(m.conf,m.kneeAngle,m.freeLift==null?null:m.freeLift*100,'Pierna libre','%');
+          const possible=candidates.find(c=>stand[c.side]&&
+            now-stand[c.side].last<=C.baselineLongAge);
           feedback('Pistol: esperando subida inicial',
-            'Párate por completo antes de bajar. La primera rep cortada no cuenta; no hace falta elevar antes la pierna libre.',
+            possible
+            ?'Posición alta reconocida. Para iniciar, dobla y baja la pierna de apoyo con el otro pie libre; evita que quede oculta junto al poste.'
+            :'Párate por completo antes de bajar. La primera rep cortada no cuenta; no hace falta elevar antes la pierna libre.',
             'info',now);
         }
         return;
@@ -213,7 +233,10 @@
     if(a.bottom&&returnedHip&&(returnedKnee||strongReturn)&&
        !m.inferredAnkle){
       if(a.topAt==null)a.topAt=now;
-      if((now-a.topAt>=125||returnedKnee&&a.samples>=7)&&now-a.started>=300){
+      const clearLockout=m.kneeAngle>=155 &&
+        m.hip.y<=a.baseline.hipY+Math.max(10,m.scale*.18);
+      if((now-a.topAt>=125||returnedKnee&&a.samples>=7||
+          clearLockout&&a.samples>=5)&&now-a.started>=300){
         const ok=a.unilateral&&a.freeSeen&&fullRom&&a.trustedBottom;
         const limb=a.side==='L'?'izquierda':'derecha';
         attempt=null;
@@ -280,5 +303,5 @@
     return model;
   };
   ADVANCED.pistolsquat.guide='Vista lateral con cuerpo y pies completos. Parte desde arriba; baja en una pierna con el pie libre elevado o extendido al frente y vuelve arriba. Se permiten microcortes de cadera/rodilla. La primera rep cortada no cuenta.';
-  console.info('[CaliReps AI] Pistol squat v13.2: occlusion bridge and late-rep completion.');
+  console.info('[CaliReps AI] Pistol squat v13.3: late rep re-arm, stable support-side recovery.');
 })();
