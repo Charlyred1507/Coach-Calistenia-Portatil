@@ -1,4 +1,4 @@
-/* CaliReps AI — pistol squat v13.1
+/* CaliReps AI — pistol squat v13.2
  * Separate, self-contained pistol FSM; leaves all other exercise judges alone.
  * Calibration reference 45363.mp4: first repetition cropped, 3 complete.
  * Uses 512px MoveNet multipose for uploaded clips and 384px for live camera.
@@ -11,16 +11,26 @@
   const C={minConf:.11,baselineKnee:140,downKnee:138,departAngle:17,
     topKnee:139,deepKnee:113,deepPerspectiveKnee:125,
     minROM:38,minDrop:.48,freeLift:.10,freeForward:.65,
-    maxGap:850,occlusionGrace:700,peakWindow:1150};
-  let stand={L:null,R:null},attempt=null,lastMsg='',lastMsgAt=-Infinity;
-  const reset=()=>{stand={L:null,R:null};attempt=null;lastMsg='';lastMsgAt=-Infinity};
+    maxGap:1550,occlusionGrace:1350,ankleMemory:550,peakWindow:1350};
+  let stand={L:null,R:null},attempt=null,lastMsg='',lastMsgAt=-Infinity,
+    ankleMemory={L:null,R:null};
+  const reset=()=>{stand={L:null,R:null};attempt=null;
+    ankleMemory={L:null,R:null};lastMsg='';lastMsgAt=-Infinity};
   const raw=(pose,i)=>v10RawPoint(pose,i,C.minConf);
   const fmt=v=>Number.isFinite(v)?Math.round(v)+'°':'sin lectura';
-  const leg=(pose,side)=>{
+  const leg=(pose,side,now)=>{
     const l=side==='L';
     const hip=raw(pose,l?IDX.leftHip:IDX.rightHip);
     const knee=raw(pose,l?IDX.leftKnee:IDX.rightKnee);
-    const ankle=raw(pose,l?IDX.leftAnkle:IDX.rightAnkle);
+    const seenAnkle=raw(pose,l?IDX.leftAnkle:IDX.rightAnkle);
+    if(seenAnkle)ankleMemory[side]={p:seenAnkle,t:now};
+    // The support foot stays on the floor. Bridge only a SHORT hidden
+    // ankle, never invent a moving knee or hip.
+    const memo=ankleMemory[side];
+    const footAnchor=attempt?.side===side?attempt.baseline:stand[side];
+    const tracked=memo&&footAnchor&&now-memo.t<=C.ankleMemory &&
+      distance(memo.p,footAnchor)<Math.max(15,(footAnchor.scale||30)*.8);
+    const ankle=seenAnkle||(tracked?memo.p:null);
     if(!hip||!knee||!ankle)return null;
     const thigh=distance(hip,knee),shin=distance(knee,ankle);
     if(!Number.isFinite(thigh)||!Number.isFinite(shin)||thigh<8||shin<8)return null;
@@ -35,6 +45,7 @@
     const standing=kneeAngle>=C.baselineKnee && depth<=-.15;
     return {side,hip,knee,ankle,fAnkle,fKnee,thigh,shin,scale,kneeAngle,
       depth,freeLift,freeForward,standing,
+      inferredAnkle:!seenAnkle,
       conf:Math.min(hip.score,knee.score,ankle.score)};
   };
   function feedback(title,detail,level='info',now=judgeTime()){
@@ -55,7 +66,7 @@
     }
   }
   function captureBaseline(m,t){
-    if(!m.standing)return;
+    if(!m.standing||m.inferredAnkle)return;
     let b=stand[m.side];
     if(!b||t-b.last>2200||distance(m.ankle,b)>m.scale*.95){
       // Recalibrate immediately after a switch of supporting foot.
@@ -74,11 +85,18 @@
     stand[m.side]=b;
   }
   const unilateral=m=>{
-    if(!m||!m.fAnkle)return false;
-    const horizontal=(m.freeForward??0)>=C.freeForward;
-    const elevated=(m.freeLift??-2)>=C.freeLift;
-    const physicallySeparate=horizontal && m.fAnkle.y<=m.ankle.y+m.scale*.12;
-    return elevated||physicallySeparate;
+    if(!m)return false;
+    if(m.fAnkle){
+      const horizontal=(m.freeForward??0)>=C.freeForward;
+      const elevated=(m.freeLift??-2)>=C.freeLift;
+      const physicallySeparate=horizontal&&m.fAnkle.y<=m.ankle.y+m.scale*.12;
+      if(elevated||physicallySeparate)return true;
+    }
+    // Forward free knee is valid evidence when the ankle is masked by
+    // the upright rig. Do NOT accept two feet planted close together.
+    return !!(m.fKnee&&m.fKnee.score>=.20 &&
+      Math.abs(m.fKnee.x-m.knee.x)>=m.scale*.82 &&
+      m.fKnee.y<m.ankle.y-m.scale*.16);
   };
   function selectStart(candidates,now){
     const possible=[];
@@ -88,14 +106,15 @@
       const drop=(m.hip.y-b.hipY)/Math.max(10,b.scale);
       const bending=b.angle-m.kneeAngle;
       const ankleDrift=distance(m.ankle,b)/Math.max(10,b.scale);
-      const start=bending>=C.departAngle && m.kneeAngle<=C.downKnee &&
+      const start=!m.inferredAnkle &&
+        bending>=C.departAngle && m.kneeAngle<=C.downKnee &&
         drop>=.11 && ankleDrift<.85;
       if(start)possible.push({m,b,drop,bending,score:bending*.6+drop*35+(unilateral(m)?10:0)});
     }
     return possible.sort((a,b)=>b.score-a.score)[0]||null;
   }
   function judgePistolV13(pose,now=judgeTime()){
-    const candidates=['L','R'].map(s=>leg(pose,s)).filter(Boolean);
+    const candidates=['L','R'].map(s=>leg(pose,s,now)).filter(Boolean);
     if(!attempt){
       for(const m of candidates)captureBaseline(m,now);
       const start=selectStart(candidates,now);
@@ -117,8 +136,9 @@
       attempt={side:m.side,started:now,lastValid:now,
         baseline:{...b},minKnee:m.kneeAngle,minAt:now,
         maxDepth:m.depth,depthAt:now,maxDrop:start.drop,
-        unilateral:unilateral(m),freeSeen:!!m.fAnkle,
-        bottom:false,topAt:null,samples:1,phase:'down'};
+        unilateral:unilateral(m),freeSeen:!!m.fAnkle||unilateral(m),
+        bottom:false,topAt:null,samples:1,phase:'down',
+        trustedBottom:false,inferredFrames:0,goodBottomSamples:0};
       feedback('Pistol: bajada detectada',
         'Pierna de apoyo '+(m.side==='L'?'izquierda':'derecha')+
         ' fijada. Confirma profundidad y extiende la misma pierna.','info',now);
@@ -139,6 +159,10 @@
         'Rodilla o tobillo temporalmente ocultos; se conserva el intento sin sumar frames.','info',now);
       return;
     }
+    // Inferred ankle can bridge only a short occlusion. At least one
+    // measured low position and one measured high position remain needed.
+    if(m.inferredAnkle)a.inferredFrames++;
+    else a.inferredFrames=0;
     a.lastValid=now;a.samples++;
     markVisible();updateMetrics(m.conf,m.kneeAngle,
       m.freeLift==null?null:m.freeLift*100,'Pierna libre','%');
@@ -147,7 +171,7 @@
     const hipDrop=(m.hip.y-a.baseline.hipY)/Math.max(10,a.baseline.scale);
     a.maxDrop=Math.max(a.maxDrop,hipDrop);
     if(unilateral(m))a.unilateral=true;
-    if(m.fAnkle)a.freeSeen=true;
+    if(m.fAnkle||unilateral(m))a.freeSeen=true;
     const supportDrift=distance(m.ankle,a.baseline)/Math.max(10,a.baseline.scale);
     if(supportDrift>1.55){
       attempt=null;
@@ -160,7 +184,23 @@
     const temporalPeak=Math.abs(a.minAt-a.depthAt)<=C.peakWindow;
     const fullRom=a.baseline.angle-a.minKnee>=C.minROM;
     if(temporalPeak&&fullRom&&a.maxDrop>=C.minDrop&&
-       (strongDepth||projectedDepth))a.bottom=true;
+       (strongDepth||projectedDepth)){
+      a.goodBottomSamples++;
+      if(!m.inferredAnkle || a.goodBottomSamples>=2){
+        a.bottom=true;
+        if(!m.inferredAnkle)a.trustedBottom=true;
+      }
+    }
+    // At bottom the near pole may mask ankle/foot. Hip must cross the
+    // knee, knee must visibly bend, and a single-leg cue must exist.
+    // Requiring another confident frame above/below avoids a phantom rep.
+    const strongPartialDepth=a.maxDrop>=.78&&a.maxDepth>=-.035 &&
+      a.minKnee<=130&&a.baseline.angle-a.minKnee>=40;
+    if(strongPartialDepth&&a.unilateral&&
+       (a.goodBottomSamples>=2||!m.inferredAnkle&&m.depth>=-.035)){
+      a.bottom=true;
+      if(!m.inferredAnkle)a.trustedBottom=true;
+    }
     const progress=Math.min(100,Math.max(0,Math.min(
       (a.baseline.angle-a.minKnee)/Math.max(20,a.baseline.angle-C.deepKnee)*100,
       (a.maxDrop)/.75*100)));
@@ -168,10 +208,13 @@
     const returnedHip=m.hip.y<=a.baseline.hipY+Math.max(12,m.scale*.32);
     const returnedKnee=m.kneeAngle>=C.topKnee&&
       m.kneeAngle>=a.baseline.angle-22;
-    if(a.bottom&&returnedHip&&returnedKnee){
+    const strongReturn=returnedHip&&m.kneeAngle>=133&&
+      m.kneeAngle>=a.baseline.angle-28&&a.maxDrop>=.65;
+    if(a.bottom&&returnedHip&&(returnedKnee||strongReturn)&&
+       !m.inferredAnkle){
       if(a.topAt==null)a.topAt=now;
-      if((now-a.topAt>=70||a.samples>=7)&&now-a.started>=300){
-        const ok=a.unilateral&&a.freeSeen&&fullRom;
+      if((now-a.topAt>=125||returnedKnee&&a.samples>=7)&&now-a.started>=300){
+        const ok=a.unilateral&&a.freeSeen&&fullRom&&a.trustedBottom;
         const limb=a.side==='L'?'izquierda':'derecha';
         attempt=null;
         for(const c of candidates)captureBaseline(c,now);
@@ -237,5 +280,5 @@
     return model;
   };
   ADVANCED.pistolsquat.guide='Vista lateral con cuerpo y pies completos. Parte desde arriba; baja en una pierna con el pie libre elevado o extendido al frente y vuelve arriba. Se permiten microcortes de cadera/rodilla. La primera rep cortada no cuenta.';
-  console.info('[CaliReps AI] Pistol squat v13.1: stronger tracking, recovery, 384/512 pose detector.');
+  console.info('[CaliReps AI] Pistol squat v13.2: occlusion bridge and late-rep completion.');
 })();
