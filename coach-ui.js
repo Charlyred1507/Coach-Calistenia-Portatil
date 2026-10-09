@@ -1227,18 +1227,36 @@
     return clampCoach(100-cv(r)*100,0,100);
   }
   function fatiguePct(){
-    const speeds=repSpeeds();
-    if(speeds.length<4)return null;
-
-    // Fatiga = pérdida de velocidad angular respecto al inicio de la serie.
-    // Si las reps recientes son iguales o más rápidas, la fatiga visible es 0%.
-    const n=speeds.length>=6?3:2;
-    const first=mean(speeds.slice(0,n));
-    const recent=mean(speeds.slice(-n));
-
-    if(!Number.isFinite(first)||first<=0||!Number.isFinite(recent))return null;
-
-    return clampCoach((first-recent)/first*100,0,100);
+    // Performance deterioration, NOT physiological fatigue. Transparent
+    // comparison to the first 2-3 reps; no number before two measured reps.
+    const rs=(session?.reps||[]).filter(r=>
+      Number.isFinite(r.speed)&&r.speed>0&&
+      Number.isFinite(r.duration)&&r.duration>.06&&
+      Number.isFinite(r.rom)&&r.rom>0);
+    if(rs.length<2 || isHoldExercise())return null;
+    const early=rs.slice(0,Math.min(3,rs.length));
+    const recent=rs.slice(-Math.min(2,rs.length));
+    const baseSpeed=median(early.map(r=>r.speed));
+    const nowSpeed=median(recent.map(r=>r.speed));
+    const baseTempo=median(early.map(r=>r.duration));
+    const nowTempo=median(recent.map(r=>r.duration));
+    const baseROM=median(early.map(r=>r.rom));
+    const nowROM=median(recent.map(r=>r.rom));
+    if(![baseSpeed,nowSpeed,baseTempo,nowTempo,baseROM,nowROM].every(Number.isFinite)||
+       baseSpeed<=0||baseTempo<=0||baseROM<=0)return null;
+    const speedLoss=clampCoach((baseSpeed-nowSpeed)/baseSpeed,0,1);
+    const tempoSlow=clampCoach((nowTempo-baseTempo)/baseTempo,0,1);
+    const romLoss=clampCoach((baseROM-nowROM)/baseROM,0,1);
+    return clampCoach((.55*speedLoss+.25*tempoSlow+.20*romLoss)*100,0,100);
+  }
+  function workloadText(){
+    const rs=session?.reps||[];
+    const n=rs.length;
+    if(!n)return 'Carga: 0 reps';
+    const rom=rs.map(r=>r.rom).filter(v=>Number.isFinite(v)&&v>0);
+    const totalROM=rom.reduce((a,b)=>a+b,0);
+    return 'Carga: '+n+' '+(n===1?'rep':'reps')+
+      (rom.length?' · '+Math.round(totalROM)+'° acum.':'');
   }
   function validRate(){
     if(!session)return null;
@@ -1306,7 +1324,7 @@
     if(reason)tips.push(`Prioridad técnica: ${reason}.`);
 
     const f=fatiguePct();
-    if(Number.isFinite(f)&&f>8)tips.push('Tu tiempo por repetición aumenta al final. Baja un poco el ritmo inicial para sostener la técnica.');
+    if(Number.isFinite(f)&&f>8)tips.push('Hay deterioro observable de velocidad, tempo o ROM frente al inicio. Busca conservar el recorrido sin acelerar a costa de la técnica.');
     const con=consistencyScore();
     if(Number.isFinite(con)&&con<72)tips.push('Busca un tempo más uniforme entre repeticiones; evita acelerar una rep y frenar demasiado la siguiente.');
     const rom=romConsistencyScore();
@@ -1541,7 +1559,10 @@
         <div id="ccSpeedCard" class="cc-metric" data-quality="neutral"><span>Velocidad</span><strong id="ccSpeed">—</strong></div>
         <div id="ccRomCard" class="cc-metric" data-quality="neutral"><span>ROM</span><strong id="ccRom">—</strong></div>
         <div id="ccTempoCard" class="cc-metric" data-quality="neutral"><span>Tempo</span><strong id="ccTempo">—</strong></div>
-        <div id="ccFatigueCard" class="cc-metric" data-quality="neutral" title="Pérdida de velocidad respecto a las primeras repeticiones"><span>Fatiga</span><strong id="ccFatigue">—</strong></div>
+        <div id="ccFatigueCard" class="cc-metric" data-quality="neutral" title="Deterioro observado: 55% velocidad, 25% tempo y 20% ROM frente a las primeras reps. 0% = sin deterioro detectable, no ausencia de cansancio. La carga acumula reps y ROM.">
+          <span>Fatiga estimada*</span><strong id="ccFatigue">—</strong>
+          <small id="ccLoad" style="display:block;margin-top:3px;color:#c8d1dd;font-size:10px;line-height:1.2">Carga: 0 reps</small>
+        </div>
       </div>
       <div class="cc-coach"><span id="ccCoachText">Adopta la posición inicial.</span></div>
       <div id="ccVideoControls" class="cc-video-controls" hidden>
@@ -1737,10 +1758,8 @@
     const f=fatiguePct();
     if(!Number.isFinite(f))return null;
 
-    // Escala continua directa:
-    // 0% pérdida de velocidad = verde.
-    // 15% = amarillo.
-    // 30% o más = rojo.
+    // Escala continua de deterioro estimado (velocidad, tempo, ROM).
+    // 0% = verde, 15% = amarillo, 30% o más = rojo.
     return clampCoach(100-(f/30)*100,0,100);
   }
 
@@ -1754,6 +1773,7 @@
     $c('ccRom').textContent=last&&Number.isFinite(last.rom)?fmt0(last.rom,'°'):'—';
     $c('ccTempo').textContent=repTempoShort(last);
     $c('ccFatigue').textContent=fatigueText();
+    if($c('ccLoad'))$c('ccLoad').textContent=workloadText();
 
     setMetricQuality('ccSpeedCard',speedQuality(last));
     setMetricQuality('ccRomCard',romQuality(last));
@@ -1786,6 +1806,7 @@
       avgSpeed:mean(speeds),
       consistency:consistencyScore(),
       fatigue:fatiguePct(),
+      cumulativeLoad:workloadText(),
       validRate:validRate(),
       symmetry:symmetryScore(),
       detection:detectionScore(),
@@ -1819,7 +1840,8 @@
           <div class="cc-stat"><span>ROM medio</span><strong>${Number.isFinite(s.avgRom)?fmt0(s.avgRom,'°'):'—'}</strong></div>
           <div class="cc-stat"><span>Tempo medio</span><strong style="font-size:14px">${safeText(s.tempo)}</strong></div>
           <div class="cc-stat"><span>Consistencia</span><strong>${Number.isFinite(s.consistency)?fmt0(s.consistency,'%'):'—'}</strong></div>
-          <div class="cc-stat"><span>Fatiga</span><strong style="font-size:15px">${safeText(Number.isFinite(s.fatigue)?fatigueText():'—')}</strong></div>
+          <div class="cc-stat"><span>Fatiga estimada*</span><strong style="font-size:15px">${Number.isFinite(s.fatigue)?Math.round(s.fatigue)+'%':'—'}</strong></div>
+          <div class="cc-stat"><span>Trabajo acumulado</span><strong style="font-size:12px">${safeText(s.cumulativeLoad||'—')}</strong></div>
           <div class="cc-stat"><span>Validez</span><strong>${Number.isFinite(s.validRate)?fmt0(s.validRate,'%'):'—'}</strong></div>
         </div>
         <div class="cc-card">
@@ -1836,6 +1858,7 @@
             </table>
           </div>
         </div>`:''}
+        <p class="cc-note">* Fatiga estimada = caída de velocidad, aumento de tiempo y reducción del ROM respecto al inicio. 0% indica que no se observó deterioro, no que el atleta no esté cansado. La carga acumulada suma trabajo observado y no es fatiga fisiológica.</p>
         <div class="cc-actions two">
           <button id="ccNewSeries" class="cc-button primary">${s.source==='clip'?'↺ Analizar de nuevo':'Nueva serie'}</button>
           <button id="ccSummaryHome" class="cc-button secondary">Inicio</button>
