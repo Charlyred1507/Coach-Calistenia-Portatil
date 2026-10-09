@@ -1,4 +1,4 @@
-/* CaliReps AI — pistol squat v13.5
+/* CaliReps AI — pistol squat v13.6
  * Separate, self-contained pistol FSM; leaves all other exercise judges alone.
  * Calibration reference 45363.mp4: first repetition cropped, 3 complete.
  * Uses 512px MoveNet multipose for uploaded clips and 384px for live camera.
@@ -126,24 +126,42 @@
     const remembered=ankleMemory[side];
     const ankle=ankleSeen||(remembered&&now-remembered.t<=C.ankleMemory?
       remembered.p:null);
-    if(!hip||!ankle)return null;
+    if(!hip)return null;
     const scale=Math.max(18,b.scale);
-    if(distance(ankle,b)/scale>.90)return null;
+    const drop=(hip.y-b.hipY)/scale;
+    const knee=raw(pose,L?IDX.leftKnee:IDX.rightKnee);
+    // In 45369.mp4 the support ankle is occasionally mislabeled: the
+    // detected ankle follows the EXTENDED FREE LEG horizontally. The
+    // stationary support foot was already observed during upright frames.
+    // This is NOT a free license to invent a planted foot: require a
+    // recent trusted standing anchor, pronounced hip descent, a long
+    // forward knee-to-ankle vector, and a nearly straight projected leg.
+    const sweptFree=!!(ankleSeen&&knee&&b.samples>=2&&
+      now-b.last<=C.baselineLongAge &&
+      drop>=.67 &&
+      Math.abs(ankleSeen.x-b.x)/scale>=1.20 &&
+      distance(ankleSeen,b)/scale>=1.40 &&
+      knee.y<b.y-scale*.22 &&
+      ankleSeen.y<=b.y+scale*.24 &&
+      Math.abs(ankleSeen.x-knee.x)/scale>=.45 &&
+      angle(hip,knee,ankleSeen)>=140);
+    if(!ankle&&!sweptFree)return null;
+    if(!sweptFree&&distance(ankle,b)/scale>.90)return null;
     const freeAnkle=raw(pose,L?IDX.rightAnkle:IDX.leftAnkle);
     const freeKnee=raw(pose,L?IDX.rightKnee:IDX.leftKnee);
-    const footFree=!!(freeAnkle&&(
+    const footFree=sweptFree||!!(freeAnkle&&(
        (ankle.y-freeAnkle.y)/scale>=.12 ||
        Math.abs(ankle.x-freeAnkle.x)/scale>=.8 &&
        freeAnkle.y<=ankle.y+.12*scale
     ))||!!(freeKnee&&freeKnee.score>=.2 &&
        Math.abs(freeKnee.x-ankle.x)/scale>=1.0 &&
        freeKnee.y<ankle.y-scale*.18);
-    const drop=(hip.y-b.hipY)/scale;
-    const hipNearFoot=(b.y-hip.y)/scale<=1.25;
-    return{drop,footFree,hipNearFoot,hip,ankle,
+    const hipNearFoot=(b.y-hip.y)/scale<=1.42;
+    return{drop,footFree,hipNearFoot,hip,ankle:sweptFree?b:ankle,
+      sweptFree,
       // Hip descent is measurable even while MoveNet assigns an
-      // artificially straight angle to the supporting knee.
-      low:footFree&&drop>=.74&&hipNearFoot};
+      // artificially straight angle and moving foot to the support leg.
+      low:footFree&&drop>=.72&&hipNearFoot};
   }
   function selectPartialStart(pose,now){
     const possible=[];
@@ -263,6 +281,18 @@
       if(a.partialLowFrames>=2&&now-a.partialLowAt>=85){
         a.partialBottom=true;a.bottom=true;a.trustedBottom=true;
       }
+    }
+    // When MoveNet swaps the support foot with the forward free foot,
+    // retain the grounded reference instead of discarding the entire rep
+    // on supportDrift. Do not use the false knee angle as ROM evidence.
+    if(body?.sweptFree){
+      a.lastValid=now;
+      a.unilateral=true;a.freeSeen=true;
+      a.maxDrop=Math.max(a.maxDrop,body.drop);
+      feedback('Pistol: pie de apoyo oculto',
+        'Pierna libre extendida; sigo el pie que estaba fijo al iniciar.'+
+        ' Falta volver a extensión para acreditar.', 'info',now);
+      return;
     }
     if(!m){
       if(body&&body.footFree&&body.drop>=.27)a.lastValid=now;
@@ -404,5 +434,5 @@
     return model;
   };
   ADVANCED.pistolsquat.guide='Vista lateral con cuerpo y pies completos. Parte desde arriba; baja en una pierna con el pie libre elevado o extendido al frente y vuelve arriba. Se permiten microcortes de cadera/rodilla. La primera rep cortada no cuenta.';
-  console.info('[CaliReps AI] Pistol squat v13.5: hip-led start for false knee geometry and strict full-cycle validation.');
+  console.info('[CaliReps AI] Pistol squat v13.6: support ankle continuity through free-leg keypoint swaps.');
 })();
