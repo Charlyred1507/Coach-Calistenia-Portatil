@@ -178,7 +178,10 @@
       // descent but MoveNet estimates only 16° of knee excursion.
       // Use a distinct high-evidence hip-led entry, NOT looser defaults.
       const hipLedDeparture=free&&b.samples>=2&&
-        bending>=6&&drop>=.52&&m.depth>=-.34&&
+        bending>=6&&drop>=.55&&
+        // A wrong knee keypoint also corrupts hip-vs-knee depth. Large
+        // grounded hip travel can replace that ONE unreliable measurement.
+        (m.depth>=-.50||drop>=.75)&&
         (b.y-m.hip.y)/Math.max(10,b.scale)<=1.40;
       const start=!m.inferredAnkle&&hasBaseline&&
         (confidentDeparture||fastDeparture||hipLedDeparture)&&
