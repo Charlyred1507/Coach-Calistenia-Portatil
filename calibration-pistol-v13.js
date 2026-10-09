@@ -318,10 +318,25 @@
     if(m.fAnkle||unilateral(m))a.freeSeen=true;
     const supportDrift=distance(m.ankle,a.baseline)/Math.max(10,a.baseline.scale);
     if(supportDrift>1.55){
+      // A mislabeled free foot can keep appearing during the ascent.
+      // Hold the already observed deep pose for <=950ms, then demand
+      // the TRUE support foot reappear at the original standing anchor.
+      if(a.partialBottom&&a.trustedBottom&&a.unilateral){
+        if(a.footSwapAt==null)a.footSwapAt=now;
+        if(now-a.footSwapAt<=950){
+          feedback('Pistol: recuperando pie de apoyo',
+            'La IA sigue temporalmente la pierna libre. La repetición solo contará si reaparece el pie fijo y se ve la extensión final.',
+            'info',now);
+          return;
+        }
+      }
       attempt=null;
-      feedback('Pistol: apoyo perdido','Se movió demasiado el tobillo de apoyo; no se cuenta un cambio de pie.','warn',now);
+      feedback('Pistol: apoyo perdido',
+        'No reapareció el pie de apoyo en su referencia inicial. No se acredita este intento.',
+        'warn',now);
       return;
     }
+    a.footSwapAt=null;
     const strongDepth=a.minKnee<=C.deepKnee&&a.maxDepth>=-.13;
     const projectedDepth=a.minKnee<=C.deepPerspectiveKnee&&
       a.maxDepth>=-.06&&a.maxDrop>=.74;
