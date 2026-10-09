@@ -39,7 +39,8 @@
     startFaceGap:null,minAngle:180,maxFaceGap:-Infinity,
     maxShoulderRise:0,peakAt:null,startedAt:null,topSamples:0,
     lastCredit:previousCredit,freeNear:false,minimumGripDrift:0,
-    gripLostAt:null,gripOutliers:0,peakConfirmedAt:null,otherNearSamples:0
+    gripLostAt:null,gripOutliers:0,peakConfirmedAt:null,otherNearSamples:0,
+    faceOccludedAtPeak:false
   });
   o=freshArm();
   function oapuParts(pose,side){
@@ -183,6 +184,7 @@
     o.maxShoulderRise=Math.max(o.maxShoulderRise,rise);
     if(m.angle<o.minAngle){o.minAngle=m.angle;o.peakAt=now;}
     if(Number.isFinite(m.faceGap))o.maxFaceGap=Math.max(o.maxFaceGap,m.faceGap);
+    if(m.angle<=132 && m.faceGap==null)o.faceOccludedAtPeak=true;
     if(m.otherAtGrip)o.freeNear=true;
     // Strong geometry must coexist within the SAME pull.
     // The face may be occluded briefly by the bar; shoulder elevation and
@@ -194,7 +196,8 @@
       (faceVisible&&o.startFaceGap!=null&&o.maxFaceGap-o.startFaceGap>=.48);
     const actualClimb=o.minAngle<=125 &&
       o.startAngle-o.minAngle>=40 && bodyClimb &&
-      (faceClimb || (o.minAngle<=112&&o.maxShoulderRise>=.24));
+      (faceClimb ||
+       (o.faceOccludedAtPeak&&o.minAngle<=112&&o.maxShoulderRise>=.24));
     const supported=o.hand&&m.handAbove&&
       Math.abs(m.p.wrist.y-o.hand.y)<=m.length*.55&&
       distance(m.p.wrist,o.hand)<=m.length*.60;
