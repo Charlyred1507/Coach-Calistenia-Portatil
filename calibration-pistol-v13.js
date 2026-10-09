@@ -188,6 +188,7 @@
         ankleDrift<(age>C.baselineFreshAge?.98:1.10) &&
         (age<C.baselineFreshAge||free);
       if(start)possible.push({m,b,drop,bending,
+        mode:hipLedDeparture&&!confidentDeparture&&!fastDeparture?'hip':'knee',
         score:bending*.62+drop*30+(free?16:0)+
           (m.fAnkle?3:0)-ankleDrift*18-(age>C.baselineFreshAge?4:0)});
     }
@@ -237,7 +238,10 @@
         partialLowFrames:0,partialLowAt:null,partialBottom:false};
       feedback('Pistol: bajada detectada',
         'Pierna de apoyo '+(side==='L'?'izquierda':'derecha')+
-        (partialStart?' · seguimiento parcial de rodilla.':'')+
+        (partialStart?' · seguimiento parcial de rodilla.':
+          start.mode==='hip'?' · inicio por cadera ('+
+          Math.round(start.drop*100)+'% de descenso; rodilla solo '+
+          Math.round(start.bending)+'°).':'')+
         ' Confirma profundidad y extiende la misma pierna.','info',now);
       return;
     }
