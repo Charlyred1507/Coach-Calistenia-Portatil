@@ -12,14 +12,14 @@ El correo de Google confirma que el sitio sigue en revisión; no es una notifica
 | Privacidad | Aviso actualizado sobre publicidad y cookies de Google, terceros, almacenamiento local, cámara y sincronización opcional. Se evita prometer controles de consentimiento que no se han configurado. |
 | SEO | Títulos y descripciones, canonical por página, Open Graph, sitemap ampliado y rutas rastreables. robots.txt y ads.txt existentes se conservan. |
 | Rendimiento y formatos | Web estática, CSS local y tipografía del sistema; formularios diferidos; esquema SVG con dimensiones explícitas. La app conserva la carga diferida de librerías de visión al iniciar un análisis. |
-| Exactitud del contenido | 14 guías revisadas contra el código. Se aclaran las aproximaciones del modelo, la pérdida de velocidad y el carácter provisional de los resultados. |
+| Exactitud del contenido | 10 guías revisadas contra el código. Se aclaran las aproximaciones del modelo, la pérdida de velocidad y el carácter provisional de los resultados. |
 | Anuncios | Sin código publicitario en páginas de contacto, legales, Quiénes somos o índice de guías; sin espacios publicitarios en pantallas de la app ni resultados automáticos. Se conserva el fragmento original de AdSense en portada y artículos. |
 
 ## Pendiente de publicación y cuenta
 
 - La captura de Cloudflare identifica `calireps-ai-website` como el proyecto de `calirepsai.com`, conectado al repositorio `CaliReps-AI-Website`. Ese repositorio publica los archivos estáticos desde la raíz. El proyecto `coach-calistenia-portatil` y su repositorio se mantienen separados para `app.calirepsai.com`.
 - Las mejoras se trasladaron a este repositorio conservando la estructura de publicación y los archivos originales `script.js`, `robots.txt` y `ads.txt`. La antigua ruta `/guides/contact.html` redirige al contacto vigente sin anuncios.
-- Antes del traslado se comprobaron las 20 páginas de contenido en tres anchuras de pantalla, los enlaces locales y el comportamiento de la app. La publicación debe verificarse en el dominio principal tras el despliegue automático.
+- Antes del traslado se comprobaron las páginas de contenido en tres anchuras de pantalla, los enlaces locales y el comportamiento de la app. La publicación debe verificarse en el dominio principal tras el despliegue automático.
 - Verificar en AdSense la CMP certificada de Google/TCF si se muestran anuncios a usuarios del EEE, Reino Unido o Suiza. El aviso de privacidad no reemplaza el consentimiento. El estado de esta configuración no es accesible desde el repositorio.
 - Configurar en AdSense las exclusiones de anuncios automáticos para Contacto, Privacidad, Términos, Quiénes somos y pantallas de la herramienta. Quitar el script de una página no sustituye esa configuración de cuenta.
 - Mantener las guías revisadas al cambiar los jueces. Incorporar demostraciones reales propias si están disponibles; no se publican videos ni credenciales ficticias para simular variedad.

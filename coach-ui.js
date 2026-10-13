@@ -8,7 +8,7 @@
   - Cámara y video local siguen usando el mismo detector y el mismo juez del core.
 */
 (() => {
-  const COACH_VERSION = '1.6.1';
+  const COACH_VERSION = '1.6.3';
   const STORE_KEY = 'calicoach-history-v1';
   const MAX_HISTORY = 30;
   const $c = (id) => document.getElementById(id);
@@ -979,7 +979,7 @@
   let videoResetInProgress=false;
 
   function exerciseName(id=exerciseSelect.value){
-    return EXERCISES?.[id]?.name || exerciseSelect.selectedOptions?.[0]?.textContent || id;
+    return exerciseLabel(id);
   }
   function isHoldExercise(id=exerciseSelect.value){
     try { return typeof isHold==='function' && isHold(id); } catch (_) { return ['frontlever','handstand'].includes(id); }
@@ -1060,7 +1060,7 @@
     let primary=null, kind='angle';
 
     if (['pushup','dip','pullup','muscleup','hspu','onearmpullup'].includes(id)) primary=best.elbowAngle;
-    else if (['squat','pistolsquat','lunge','squatboxjump','burpee','boxjump'].includes(id)) primary=best.kneeAngle;
+    else if (['squat','pistolsquat'].includes(id)) primary=best.kneeAngle;
     else if (['frontlever','handstand'].includes(id)) {
       primary=best.torsoTilt;
       kind='tilt';
@@ -1142,7 +1142,7 @@
     if(minSample){
       const before=(minSample.t-(seg[0]?.t??minSample.t))/1000;
       const after=(endT-minSample.t)/1000;
-      if(['pushup','dip','squat','hspu','pistolsquat','lunge','burpee','squatboxjump'].includes(id)){
+      if(['pushup','dip','squat','hspu','pistolsquat'].includes(id)){
         lowering=Math.max(0,before);rising=Math.max(0,after);
       }else if(['pullup','onearmpullup'].includes(id)){
         rising=Math.max(0,before);lowering=Math.max(0,after);
@@ -1832,7 +1832,7 @@
     summaryScreen.innerHTML=`
       <div class="cc-shell">
         <div class="cc-brand">Resumen de serie</div>
-        <h1 class="cc-title">${safeText(s.exerciseName)}</h1>
+        <h1 class="cc-title">${safeText(EXERCISES[s.exercise]?s.exerciseName:exerciseLabel(s.exercise))}</h1>
         <div class="cc-score" style="--score:${s.score}">
           <div class="cc-score-inner"><strong>${s.score}</strong><small>/100</small></div>
         </div>
@@ -1894,7 +1894,7 @@
         <div class="cc-card">
           ${arr.length?arr.map(x=>`
             <div class="cc-history-item">
-              <div><strong>${safeText(x.exerciseName||x.exercise)}</strong><br>
+              <div><strong>${safeText(EXERCISES[x.exercise]?(x.exerciseName||exerciseLabel(x.exercise)):exerciseLabel(x.exercise))}</strong><br>
               <small>${new Date(x.date).toLocaleString()} · ${x.reps} ${['frontlever','handstand'].includes(x.exercise)?'créditos':'reps'} · score ${x.score}</small></div>
               <strong>${x.score}</strong>
             </div>`).join(''):'<p>No hay series guardadas todavía.</p>'}
