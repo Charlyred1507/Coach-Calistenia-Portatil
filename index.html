@@ -2344,6 +2344,13 @@ function judgeFrontleverV95(pose,now) {
     resetFrontleverV95Hard();
     dt=0;
   }
+  // Include the returning frame: separate segments cannot complete one hold.
+  if (adv.holdValid && (
+    dt>FL95.bridge || (adv.fl95PendingGap||0)+dt>FL95.bridge
+  )) {
+    resetFrontleverV95Hard();
+    dt=0;
+  }
   adv.fl95LastAt=now;
 
   const strict=!!m?.strictValid;
@@ -2399,6 +2406,10 @@ function judgeFrontleverV95(pose,now) {
   /* Frame dudoso o pequeña oclusión. No invalidamos de inmediato un hold
      ya establecido: acumulamos el hueco y mostramos el reloj avanzando hasta
      420 ms. Solo queda confirmado si la pose vuelve dentro de ese margen. */
+  if (!adv.holdValid) {
+    adv.fl95GoodFrames=0;
+    adv.fl95LastStrictAt=null;
+  }
   if (adv.fl95BadSince==null) adv.fl95BadSince=now;
   if (adv.holdValid && dt>0 && dt<=FL95.maxGap) {
     adv.fl95PendingGap=(adv.fl95PendingGap||0)+dt;
@@ -2929,6 +2940,12 @@ function judgeHandstandV96(pose,now) {
   let dt=prevAt==null?0:now-prevAt;
 
   if (!Number.isFinite(dt)||dt<0||dt>HS96.maxGap) {
+    resetHandstandV96Hard();
+    dt=0;
+  }
+  if (adv.holdValid && (
+    dt>HS96.bridge || (adv.hs96PendingGap||0)+dt>HS96.bridge
+  )) {
     resetHandstandV96Hard();
     dt=0;
   }
@@ -8937,7 +8954,7 @@ function judgeLungeV1010(pose,now=judgeTime()){
 
   let s=lungeV1010;
 
-  if(s.last!=null&&now-s.last>LUNGE_V1010.maxGap){
+  if(s.last!=null&&(now<s.last||now-s.last>LUNGE_V1010.maxGap)){
     resetLungeV1010();
     s=lungeV1010;
   }
@@ -8965,6 +8982,30 @@ function judgeLungeV1010(pose,now=judgeTime()){
 
   updateLungeTopV1010(metrics);
   const drop=updateLungeMemoryV1010(metrics,now);
+
+  // Returning upright closes an incomplete attempt before old extrema
+  // can be combined with the pelvis drop of a later descent.
+  if(s.state==='down'){
+    const returned=metrics.sides.every(m=>
+      lungeTopishV1010(m)&&lungeFinishV1010(m,metrics)
+    )&&metrics.sides.some(m=>
+      s.mem[m.side].minKnee<LUNGE_V1010.departKnee||
+      s.mem[m.side].minHip<LUNGE_V1010.departHip
+    );
+    s.finishConfirm=returned?(s.finishConfirm||0)+1:0;
+    if(returned){
+      if(s.finishConfirm>=LUNGE_V1010.finishConfirmFrames){
+        s.state='ready';
+        s.started=null;
+        lungeClearMemoryV1010();
+        noRep('faltó profundidad antes de regresar arriba');
+      }else{
+        setStatus('Confirma el regreso arriba.','info');
+      }
+      lungeV1010=s;
+      return;
+    }
+  }
 
   const bestCurrent=metrics.sides
     .slice()
@@ -9145,6 +9186,13 @@ judgeAdvanced=function(pose,now=judgeTime()){
 exerciseSelect.addEventListener('change',()=>{
   resetLungeV1010();
 });
+
+// Global resets, pauses and lost tracking must also discard this FSM.
+const loseAttemptLungeV1010Base=loseAttempt;
+loseAttempt=function(){
+  resetLungeV1010();
+  return loseAttemptLungeV1010Base();
+};
 
 video.addEventListener('loadedmetadata',()=>{
   if(exerciseSelect.value==='lunge')resetLungeV1010();
